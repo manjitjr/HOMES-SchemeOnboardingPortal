@@ -204,6 +204,15 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#3b82f6;box-sh
 .kpi-trend{font-size:11px;color:#334155;margin-top:.25rem}
 @media (max-width:1024px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px){.kpi-grid{grid-template-columns:1fr}}
+
+.users-table-wrap{max-height:62vh;overflow:auto;border-top:1px solid #e2e8f0}
+.users-table-wrap thead th{position:sticky;top:0;z-index:1;background:linear-gradient(90deg,#eff6ff 0%,#eef2ff 55%,#fff 100%)}
+.filter-chip{border:1px solid #dbe4f5;background:#fff;border-radius:999px;padding:.28rem .7rem;font-size:11px;font-weight:600;color:#475569}
+
+#schedulingRoot .schedule-toolbar{border-radius:18px}
+#schedulingRoot .schedule-grid > div{height:100%}
+#schedulingRoot .schedule-col{display:flex;flex-direction:column;min-height:420px}
+#schedulingRoot .schedule-col-body{flex:1;overflow:auto}
 </style>
 </head>
 <body class="bg-surface-50 text-gray-800">
@@ -244,6 +253,8 @@ let S={
   agencies:[],
   userAgencyFilter:'all',
   userAgencySearch:'',
+  userRoleFilter:'all',
+  userStatusFilter:'all',
   slots:[],
   slotNotifications:[],
   selectedSlotYear:null
@@ -547,8 +558,8 @@ function renderListPage(){
           <p class="text-sm text-white/80 mt-2 max-w-2xl">A polished command view for agencies and MTO admins to create, approve, schedule, and monitor onboarding progress.</p>
         </div>
         <div class="text-xs px-4 py-2 rounded-full inline-flex items-center gap-2 w-fit border border-white/30 bg-white/10 backdrop-blur">
-          <i class="fas fa-sparkles"></i>
-          Refreshed Experience • ${new Date().toLocaleDateString()}
+          <i class="fas fa-shield-alt"></i>
+          HOMES Scheme Portal
         </div>
       </div>
     </div>
@@ -782,14 +793,46 @@ function renderUsersPage(){
       </div>
     </div>
     <div class="modern-surface rounded-xl p-4 mb-4">
-      <div class="flex flex-col sm:flex-row sm:items-center gap-3">
-        <label class="text-sm font-medium text-gray-700">Agency:</label>
-        <select onchange="S.userAgencyFilter=this.value;renderUsersTable()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+        <div class="lg:col-span-4">
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Search</label>
+          <input type="text" value="${esc(S.userAgencySearch||'')}" oninput="S.userAgencySearch=this.value;renderUsersTable()" placeholder="Search name, username, agency, role"
+            class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full bg-white">
+        </div>
+        <div class="lg:col-span-3">
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Agency</label>
+          <select onchange="S.userAgencyFilter=this.value;renderUsersTable()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white w-full">
           <option value="all" ${S.userAgencyFilter==='all'?'selected':''}>All agencies</option>
           ${agencyOptions}
         </select>
-        <input type="text" value="${esc(S.userAgencySearch||'')}" oninput="S.userAgencySearch=this.value;renderUsersTable()" placeholder="Search agency (code or name)"
-          class="sm:ml-auto border border-gray-300 rounded-lg px-3 py-2 text-sm w-full sm:w-72">
+        </div>
+        <div class="lg:col-span-2">
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Role</label>
+          <select onchange="S.userRoleFilter=this.value;renderUsersTable()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white w-full">
+            <option value="all" ${S.userRoleFilter==='all'?'selected':''}>All roles</option>
+            <option value="agency_creator" ${S.userRoleFilter==='agency_creator'?'selected':''}>Agency Creator</option>
+            <option value="agency_approver" ${S.userRoleFilter==='agency_approver'?'selected':''}>Agency Approver</option>
+            <option value="mto_admin" ${S.userRoleFilter==='mto_admin'?'selected':''}>MTO Admin</option>
+          </select>
+        </div>
+        <div class="lg:col-span-2">
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Status</label>
+          <select onchange="S.userStatusFilter=this.value;renderUsersTable()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white w-full">
+            <option value="all" ${S.userStatusFilter==='all'?'selected':''}>All</option>
+            <option value="active" ${S.userStatusFilter==='active'?'selected':''}>Active</option>
+            <option value="inactive" ${S.userStatusFilter==='inactive'?'selected':''}>Inactive</option>
+          </select>
+        </div>
+        <div class="lg:col-span-1 flex items-end">
+          <button onclick="S.userAgencyFilter='all';S.userAgencySearch='';S.userRoleFilter='all';S.userStatusFilter='all';renderUsersPage();loadUsers()" class="w-full border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 rounded-lg px-3 py-2 text-sm font-semibold transition">
+            Reset
+          </button>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 mt-3 flex-wrap">
+        <span class="filter-chip">Scrollable list</span>
+        <span class="filter-chip">Sticky headers</span>
+        <span class="filter-chip">Quick role/status filtering</span>
       </div>
     </div>
     <div id="usersTable" class="modern-card rounded-xl overflow-hidden">
@@ -810,10 +853,16 @@ function renderUsersTable(){
   const search=(S.userAgencySearch||'').trim().toLowerCase();
   const byAgency=(S.allUsers||[]).filter(u=>S.userAgencyFilter==='all'||(u.agency||'')===S.userAgencyFilter);
   const filtered=byAgency.filter(u=>{
+    const roleOk=S.userRoleFilter==='all'||(u.roles||[]).includes(S.userRoleFilter);
+    const statusOk=S.userStatusFilter==='all'||(S.userStatusFilter==='active'?u.is_active:!u.is_active);
+    if(!roleOk||!statusOk)return false;
     if(!search)return true;
     const code=(u.agency||'').toLowerCase();
     const name=((S.agencies||[]).find(a=>a.code===u.agency)?.name||'').toLowerCase();
-    return code.includes(search)||name.includes(search);
+    const display=(u.display_name||'').toLowerCase();
+    const username=(u.username||'').toLowerCase();
+    const roles=(u.roles||[]).join(' ').toLowerCase();
+    return code.includes(search)||name.includes(search)||display.includes(search)||username.includes(search)||roles.includes(search);
   }).sort((a,b)=>{
     const aa=(a.agency||'').localeCompare(b.agency||'');
     if(aa!==0)return aa;
@@ -830,35 +879,41 @@ function renderUsersTable(){
   const roleBadge=r=>{const c={agency_creator:'bg-blue-50 text-blue-700',agency_approver:'bg-amber-50 text-amber-700',mto_admin:'bg-purple-50 text-purple-700'};
     return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${c[r]||'bg-gray-100 text-gray-600'}">${r.replace(/_/g,' ')}</span>`};
   el.innerHTML=`
-  <table class="w-full text-sm">
-    <thead><tr class="bg-surface-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-      <th class="px-5 py-3">User</th><th class="px-5 py-3">Username</th><th class="px-5 py-3">Agency</th>
-      <th class="px-5 py-3">Roles</th><th class="px-5 py-3">Status</th><th class="px-5 py-3 text-right">Actions</th>
-    </tr></thead>
-    <tbody class="divide-y divide-gray-50">
-      ${filtered.map(u=>`
-      <tr class="hover:bg-surface-50 transition">
-        <td class="px-5 py-3">
-          <div class="flex items-center gap-2">
-            <div class="w-7 h-7 rounded-full ${u.is_active?'bg-brand-100':'bg-gray-100'} flex items-center justify-center">
-              <i class="fas fa-user ${u.is_active?'text-brand-600':'text-gray-400'} text-[10px]"></i>
+  <div class="px-5 py-3 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between text-xs text-slate-600">
+    <span><strong>${filtered.length}</strong> users shown</span>
+    <span>Use filters to narrow results quickly</span>
+  </div>
+  <div class="users-table-wrap">
+    <table class="w-full text-sm">
+      <thead><tr class="bg-surface-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+        <th class="px-5 py-3">User</th><th class="px-5 py-3">Username</th><th class="px-5 py-3">Agency</th>
+        <th class="px-5 py-3">Roles</th><th class="px-5 py-3">Status</th><th class="px-5 py-3 text-right">Actions</th>
+      </tr></thead>
+      <tbody class="divide-y divide-gray-50">
+        ${filtered.map(u=>`
+        <tr class="hover:bg-surface-50 transition">
+          <td class="px-5 py-3">
+            <div class="flex items-center gap-2">
+              <div class="w-7 h-7 rounded-full ${u.is_active?'bg-brand-100':'bg-gray-100'} flex items-center justify-center">
+                <i class="fas fa-user ${u.is_active?'text-brand-600':'text-gray-400'} text-[10px]"></i>
+              </div>
+              <span class="font-medium text-gray-800">${esc(u.display_name)}</span>
             </div>
-            <span class="font-medium text-gray-800">${esc(u.display_name)}</span>
-          </div>
-        </td>
-        <td class="px-5 py-3 text-gray-500 font-mono text-xs">${esc(u.username)}</td>
-        <td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700">${esc(u.agency||'-')}</span></td>
-        <td class="px-5 py-3"><div class="flex flex-wrap gap-1">${(u.roles||[]).map(roleBadge).join('')}</div></td>
-        <td class="px-5 py-3">${u.is_active?'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">Active</span>':'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700">Inactive</span>'}</td>
-        <td class="px-5 py-3 text-right">
-          <button onclick="showEditUserModal('${u.id}')" class="text-brand-500 hover:text-brand-700 mr-2"><i class="fas fa-pen text-xs"></i></button>
-          <button onclick="toggleUserActive('${u.id}',${!u.is_active})" class="${u.is_active?'text-red-400 hover:text-red-600':'text-emerald-400 hover:text-emerald-600'}" title="${u.is_active?'Deactivate':'Activate'}">
-            <i class="fas fa-${u.is_active?'ban':'check-circle'} text-xs"></i>
-          </button>
-        </td>
-      </tr>`).join('')}
-    </tbody>
-  </table>`;
+          </td>
+          <td class="px-5 py-3 text-gray-500 font-mono text-xs">${esc(u.username)}</td>
+          <td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700">${esc(u.agency||'-')}</span></td>
+          <td class="px-5 py-3"><div class="flex flex-wrap gap-1">${(u.roles||[]).map(roleBadge).join('')}</div></td>
+          <td class="px-5 py-3">${u.is_active?'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">Active</span>':'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700">Inactive</span>'}</td>
+          <td class="px-5 py-3 text-right">
+            <button onclick="showEditUserModal('${u.id}')" class="text-brand-500 hover:text-brand-700 mr-2" title="Edit user"><i class="fas fa-pen text-xs"></i></button>
+            <button onclick="toggleUserActive('${u.id}',${!u.is_active})" class="${u.is_active?'text-red-400 hover:text-red-600':'text-emerald-400 hover:text-emerald-600'}" title="${u.is_active?'Deactivate':'Activate'}">
+              <i class="fas fa-${u.is_active?'ban':'check-circle'} text-xs"></i>
+            </button>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
 }
 
 async function showCreateUserModal(){
@@ -977,25 +1032,21 @@ function renderSchedulingPage(){
         </div>
       </div>
     </div>
-    <div class="px-6 py-4 modern-surface flex items-center justify-between gap-4">
-      <div>
-        <h2 class="text-lg font-semibold text-gray-900">
-          <i class="fas fa-calendar-alt mr-2 text-brand-600"></i>Onboarding Schedule
-        </h2>
-        <p class="text-sm text-slate-500 mt-0.5">View approved onboarding slot bookings by quarter</p>
-      </div>
-      <div class="hidden sm:inline-flex text-xs px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold">
-        Calendar Console
-      </div>
-    </div>
-    <div class="p-6 max-w-7xl mx-auto">
-      <div class="mb-6 flex items-center gap-3">
-        <label class="text-sm font-medium text-gray-700">Year:</label>
-        <select id="yearSelector" onchange="S.schedulingYear=parseInt(this.value);loadSchedulingOverview()" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">
+    <div class="p-6 max-w-7xl mx-auto pt-3">
+      <div class="modern-surface schedule-toolbar p-4 mb-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div>
+          <h3 class="text-lg font-semibold text-slate-900"><i class="fas fa-calendar-alt mr-2 text-brand-600"></i>Calendar Console</h3>
+          <p class="text-sm text-slate-500 mt-0.5">Cleaner quarter view for easier planning and review</p>
+        </div>
+        <div class="flex items-center flex-wrap gap-2">
+          <span id="scheduleStats" class="filter-chip">Loading metrics...</span>
+          <label class="text-sm font-medium text-gray-700 ml-2">Year</label>
+          <select id="yearSelector" onchange="S.schedulingYear=parseInt(this.value);loadSchedulingOverview()" class="border border-gray-300 rounded-lg px-4 py-2 text-sm bg-white">
           ${[new Date().getFullYear(),new Date().getFullYear()+1,new Date().getFullYear()+2].map(y=>`<option value="${y}" ${y===S.schedulingYear?'selected':''}>${y}</option>`).join('')}
-        </select>
+          </select>
+        </div>
       </div>
-      <div id="schedulingContent" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div id="schedulingContent" class="schedule-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-brand-400 text-2xl"></i></div>
       </div>
     </div>
@@ -1015,6 +1066,10 @@ async function loadSchedulingOverview(){
 function renderSchedulingOverview(data){
   const content=document.getElementById('schedulingContent');
   if(!content)return;
+  const totalBookings=(data.quarters||[]).reduce((sum,q)=>sum+(q.bookings?.length||0),0);
+  const filledQuarters=(data.quarters||[]).filter(q=>(q.bookings?.length||0)>0).length;
+  const stats=document.getElementById('scheduleStats');
+  if(stats)stats.textContent=`${totalBookings} bookings across ${filledQuarters} of 4 onboarding windows`;
   
   // Color mapping for quarters - hardcoded for Tailwind safety
   const getQuarterClass=(month)=>{
@@ -1030,12 +1085,12 @@ function renderSchedulingOverview(data){
   content.innerHTML=data.quarters.map(q=>{
     const colors=getQuarterClass(q.month_name);
     return `
-    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden schedule-col">
       <div class="${colors.bg} ${colors.border} border-b px-4 py-3 flex items-center justify-between">
         <h3 class="font-semibold ${colors.text}">${q.month_name}</h3>
         <span class="text-[11px] px-2 py-1 rounded-full bg-white/70 border ${colors.border} ${colors.text} font-semibold">${q.bookings.length} bookings</span>
       </div>
-      <div class="p-4 space-y-3 max-h-96 overflow-y-auto">
+      <div class="p-4 space-y-3 schedule-col-body">
         ${q.bookings.length===0?
           `<p class="text-xs text-gray-400 text-center py-4">No bookings</p>`
           :q.bookings.map(b=>`
