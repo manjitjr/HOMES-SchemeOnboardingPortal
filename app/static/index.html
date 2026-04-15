@@ -16,32 +16,199 @@ surface:{50:'#f8fafc',100:'#f1f5f9',200:'#e2e8f0'}
 
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&display=swap');
 *{font-family:'Inter',system-ui,sans-serif}
+h1,h2,h3,h4,.display-title{font-family:'Manrope','Inter',system-ui,sans-serif;letter-spacing:-.02em}
+body{
+  background:
+    radial-gradient(1000px 560px at -10% -20%, rgba(37,99,235,.14), transparent 62%),
+    radial-gradient(900px 500px at 110% -10%, rgba(147,51,234,.10), transparent 60%),
+    linear-gradient(180deg,#f6f9ff 0%,#f4f7ff 35%,#f8fafc 100%);
+}
 .fade-in{animation:fadeIn .25s ease-out}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .btn-primary{background:linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%)}
 .btn-primary:hover{background:linear-gradient(135deg,#1d4ed8 0%,#1e40af 100%)}
-.toast{animation:slideIn .3s ease-out}
-@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+.btn-primary{box-shadow:0 8px 20px rgba(37,99,235,.22)}
+.btn-primary:active{transform:translateY(1px)}
+.toast{animation:toastIn .24s ease-out}
+.toast-hide{animation:toastOut .22s ease-in forwards}
+@keyframes toastIn{from{transform:translateY(-10px) scale(.98);opacity:0}to{transform:translateY(0) scale(1);opacity:1}}
+@keyframes toastOut{from{transform:translateY(0) scale(1);opacity:1}to{transform:translateY(-8px) scale(.98);opacity:0}}
 .modal-overlay{background:rgba(15,36,64,.5);backdrop-filter:blur(4px)}
 input:focus,select:focus,textarea:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
-.tab-btn.active{color:#2563eb;border-bottom:2px solid #2563eb;font-weight:600}
-.tab-btn:not(.active){color:#6b7280;border-bottom:2px solid transparent}
-.tab-btn:hover:not(.active){color:#374151}
+.tab-btn{
+  border:1px solid transparent;
+  border-radius:999px;
+  margin-right:.35rem;
+}
+.tab-btn.active{
+  color:#0f2440;
+  background:linear-gradient(135deg,#dbeafe 0%,#e0e7ff 100%);
+  border-color:#bfdbfe;
+  font-weight:600;
+  box-shadow:0 8px 22px rgba(30,64,175,.12);
+}
+.tab-btn:not(.active){color:#475569;border-color:transparent}
+.tab-btn:hover:not(.active){color:#1e293b;background:#f1f5f9;border-color:#e2e8f0}
 .tooltip-trigger:hover .tooltip-box{display:block}
 .collapsible-body{max-height:0;overflow:hidden;transition:max-height .3s ease}
 .collapsible-body.open{max-height:5000px}
+.modern-surface{background:rgba(255,255,255,.82);backdrop-filter:blur(10px);border:1px solid #e5e7eb;box-shadow:0 6px 24px rgba(15,23,42,.06)}
+.modern-card{background:#fff;border:1px solid #e5e7eb;box-shadow:0 8px 22px rgba(15,23,42,.05)}
+.modern-card:hover{box-shadow:0 14px 30px rgba(15,23,42,.08)}
+.gradient-shell{background:linear-gradient(135deg,#0f2440 0%,#1e3a5f 55%,#2563eb 100%)}
+.glass-chip{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.26);backdrop-filter:blur(10px)}
+.hero-glow{box-shadow:0 20px 50px rgba(37,99,235,.25)}
 .status-draft{background:#fef3c7;color:#92400e}
 .status-pending_review{background:#dbeafe;color:#1e40af}
 .status-pending_final{background:#e0e7ff;color:#3730a3}
 .status-approved{background:#d1fae5;color:#065f46}
 .status-rejected{background:#fee2e2;color:#991b1b}
+
+/* ===== Full App Visual Refresh ===== */
+#app{min-height:100vh}
+
+#app .modern-surface,
+#app .modern-card,
+#app #tabContent,
+#app #usersTable,
+#app #schemeTable,
+#app #modalContent,
+#app #schedulingContent > div,
+#detailRoot .bg-white.rounded-xl,
+#schedulingRoot .bg-white.rounded-lg{
+  background:rgba(255,255,255,.9);
+  border:1px solid #dbe4f5;
+  box-shadow:0 12px 30px rgba(15,23,42,.08);
+  backdrop-filter:blur(8px);
+}
+
+#app .max-w-7xl,
+#app .max-w-5xl,
+#detailBody .max-w-\[1400px\]{
+  position:relative;
+}
+
+#app .max-w-7xl::before,
+#app .max-w-5xl::before,
+#detailBody .max-w-\[1400px\]::before{
+  content:'';
+  position:absolute;
+  inset:-8px;
+  border-radius:22px;
+  background:linear-gradient(135deg,rgba(37,99,235,.07),rgba(147,51,234,.05));
+  z-index:-1;
+}
+
+#app table thead tr{
+  background:linear-gradient(90deg,#eff6ff 0%,#eef2ff 55%,#ffffff 100%) !important;
+}
+
+#app table th{
+  font-size:11px;
+  letter-spacing:.06em;
+  color:#475569;
+}
+
+#app table tbody tr:nth-child(odd){background:rgba(248,250,252,.55)}
+#app table tbody tr:hover{background:rgba(219,234,254,.4) !important}
+
+#app input,
+#app select,
+#app textarea{
+  border-radius:12px;
+  border-color:#d6ddea;
+  background:#fbfdff;
+}
+
+#app input:focus,
+#app select:focus,
+#app textarea:focus{
+  border-color:#60a5fa;
+  box-shadow:0 0 0 4px rgba(59,130,246,.14);
+  background:#fff;
+}
+
+#filterBar{
+  background:rgba(255,255,255,.78);
+  border:1px solid #dbe4f5;
+  border-radius:999px;
+  padding:.35rem;
+  width:fit-content;
+  box-shadow:0 10px 24px rgba(15,23,42,.08);
+}
+
+#filterBar button{
+  border-radius:999px !important;
+  padding:.45rem .9rem !important;
+}
+
+#detailRoot #detailTitle{
+  font-size:15px;
+  font-weight:700;
+}
+
+#detailRoot #detailBody{padding-top:1.25rem}
+
+#detailRoot .w-80 .rounded-xl{
+  border-radius:16px;
+}
+
+#detailRoot .border-b.border-gray-200.mb-6{
+  border:1px solid #dbe4f5;
+  border-radius:14px;
+  padding:.4rem;
+  margin-bottom:1rem;
+  background:linear-gradient(135deg,#ffffff 0%,#f8fbff 100%);
+}
+
+#schedulingRoot .px-6.py-3.modern-surface,
+#detailRoot .px-6.py-3.modern-surface{
+  margin:1rem auto 0;
+  width:min(1200px,calc(100% - 2rem));
+  border-radius:16px;
+}
+
+.btn-primary{
+  border:1px solid rgba(255,255,255,.22);
+  border-radius:12px;
+}
+
+#usersTable button.text-brand-500,
+#usersTable button.text-red-400,
+#usersTable button.text-emerald-400{
+  background:#f8fafc;
+  border:1px solid #e2e8f0;
+  width:30px;
+  height:30px;
+  border-radius:10px;
+}
+
+#modalContent{
+  border-radius:18px;
+  border:1px solid #dbe4f5;
+}
+
+#toasts .toast{
+  border:1px solid #dbe4f5;
+  box-shadow:0 16px 35px rgba(15,23,42,.14);
+}
+
+.section-wrap{border-radius:20px;padding:1.1rem;border:1px solid #d9e4f7;background:linear-gradient(140deg,#ffffff 0%,#f8fbff 100%);box-shadow:0 14px 34px rgba(15,23,42,.08)}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.85rem}
+.kpi-card{border:1px solid #dde7f9;background:#fff;border-radius:16px;padding:.9rem .95rem;box-shadow:0 10px 22px rgba(15,23,42,.06)}
+.kpi-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#64748b;font-weight:700}
+.kpi-value{font-family:'Manrope','Inter',system-ui,sans-serif;font-weight:800;font-size:1.45rem;color:#0f172a;line-height:1.1;margin-top:.25rem}
+.kpi-trend{font-size:11px;color:#334155;margin-top:.25rem}
+@media (max-width:1024px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){.kpi-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body class="bg-surface-50 text-gray-800">
 
-<div id="toasts" class="fixed top-4 right-4 z-[60] flex flex-col gap-2"></div>
+<div id="toasts" class="fixed top-4 left-1/2 -translate-x-1/2 z-[60] flex flex-col items-center gap-2 pointer-events-none w-[92vw] max-w-xl"></div>
 
 <div id="app"></div>
 
@@ -110,11 +277,24 @@ async function ensureAgenciesLoaded(){
 
 function toast(msg,type='success'){
   const d=document.createElement('div');
-  const c={success:'bg-emerald-500',error:'bg-red-500',info:'bg-brand-500'};
-  d.className=`toast px-4 py-2.5 rounded-lg text-white text-sm font-medium shadow-lg ${c[type]||c.info}`;
-  d.innerHTML=`<i class="fas fa-${type==='success'?'check-circle':type==='error'?'exclamation-circle':'info-circle'} mr-2"></i>${msg}`;
+  const c={
+    success:'border-emerald-200 bg-emerald-50 text-emerald-800',
+    error:'border-red-200 bg-red-50 text-red-800',
+    info:'border-brand-200 bg-brand-50 text-brand-800'
+  };
+  d.className=`toast pointer-events-auto w-full border rounded-xl px-4 py-3 text-sm font-medium shadow-md backdrop-blur ${c[type]||c.info}`;
+  d.innerHTML=`
+    <div class="flex items-start justify-between gap-3">
+      <div class="flex items-start gap-2">
+        <i class="mt-0.5 fas fa-${type==='success'?'circle-check':type==='error'?'triangle-exclamation':'circle-info'}"></i>
+        <span>${esc(msg)}</span>
+      </div>
+      <button type="button" aria-label="Dismiss" class="text-gray-400 hover:text-gray-600" onclick="this.closest('.toast')?.remove()">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>`;
   document.getElementById('toasts').appendChild(d);
-  setTimeout(()=>d.remove(),3500);
+  setTimeout(()=>{d.classList.add('toast-hide');setTimeout(()=>d.remove(),220)},3200);
 }
 
 // ════════════════════════════════════════
@@ -125,6 +305,17 @@ async function doLogin(e){
   const u=e.target.username.value,p=e.target.password.value;
   try{
     const r=await api('/api/auth/login',{method:'POST',body:{username:u,password:p}});
+    S.token=r.token;S.user=r.user;
+    localStorage.setItem('homes_token',r.token);
+    localStorage.setItem('homes_user',JSON.stringify(r.user));
+    toast('Welcome, '+S.user.display_name);
+    render();
+  }catch(err){toast(err.message,'error')}
+}
+
+async function demoAdminLogin(){
+  try{
+    const r=await api('/api/auth/login',{method:'POST',body:{username:'mto_admin',password:'password'}});
     S.token=r.token;S.user=r.user;
     localStorage.setItem('homes_token',r.token);
     localStorage.setItem('homes_user',JSON.stringify(r.user));
@@ -245,6 +436,15 @@ function renderLogin(){
           </button>
         </form>
 
+        <div class="relative my-5">
+          <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-gray-100"></div></div>
+          <div class="relative flex justify-center text-[10px] uppercase tracking-wider text-gray-400"><span class="bg-white px-3">Demo Access</span></div>
+        </div>
+
+        <button onclick="demoAdminLogin()" class="w-full border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 py-3 rounded-xl text-sm font-semibold transition">
+          <i class="fas fa-bolt mr-2"></i>Login as Demo Admin
+        </button>
+
         <div class="mt-8 p-4 rounded-xl bg-surface-50 border border-gray-100">
           <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Demo Credentials</p>
           <div class="space-y-2">
@@ -277,42 +477,42 @@ function renderLogin(){
 // ── HEADER ──
 function renderHeader(){
   const roleLabels={agency_creator:'Agency Creator',agency_approver:'Agency Approver',mto_admin:'MTO Admin'};
-  const roleTags=(S.user.roles||[]).map(r=>`<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-brand-50 text-brand-700">${roleLabels[r]||r}</span>`).join(' ');
+  const roleTags=(S.user.roles||[]).map(r=>`<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold glass-chip text-white">${roleLabels[r]||r}</span>`).join(' ');
   return `
-  <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between sticky top-0 z-20">
+  <header class="gradient-shell px-6 py-3 flex items-center justify-between sticky top-0 z-20 border-b border-white/10 shadow-xl">
     <div class="flex items-center gap-4">
       <div class="flex items-center gap-3 cursor-pointer" onclick="S.view='list';render()">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center">
+        <div class="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center">
           <i class="fas fa-home text-white text-sm"></i>
         </div>
         <div>
-          <span class="text-sm font-bold text-brand-900">HOMES</span>
-          <span class="text-xs text-gray-400 ml-1">Scheme Onboarding</span>
+          <span class="text-sm font-bold text-white">HOMES</span>
+          <span class="text-xs text-white/70 ml-1">Scheme Onboarding</span>
         </div>
       </div>
       <nav class="hidden sm:flex items-center gap-1 ml-4">
-        <button onclick="S.view='list';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='list'||S.view==='detail'?'bg-brand-50 text-brand-700':'text-gray-500 hover:bg-gray-50'}">
+        <button onclick="S.view='list';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='list'||S.view==='detail'?'bg-white text-brand-800':'text-white/80 hover:bg-white/15'}">
           <i class="fas fa-layer-group mr-1"></i>Schemes
         </button>
-        <button onclick="S.view='scheduling';S.schedulingYear=new Date().getFullYear();render();loadSchedulingOverview()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='scheduling'?'bg-brand-50 text-brand-700':'text-gray-500 hover:bg-gray-50'}">
+        <button onclick="S.view='scheduling';S.schedulingYear=new Date().getFullYear();render();loadSchedulingOverview()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='scheduling'?'bg-white text-brand-800':'text-white/80 hover:bg-white/15'}">
           <i class="fas fa-calendar-alt mr-1"></i>Scheduling
         </button>
         ${isAdmin()?`
-        <button onclick="S.view='users';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='users'?'bg-brand-50 text-brand-700':'text-gray-500 hover:bg-gray-50'}">
+        <button onclick="S.view='users';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='users'?'bg-white text-brand-800':'text-white/80 hover:bg-white/15'}">
           <i class="fas fa-users-cog mr-1"></i>User Management
         </button>`:''}
       </nav>
     </div>
     <div class="flex items-center gap-3">
       <div class="hidden md:flex items-center gap-1">${roleTags}</div>
-      ${S.user.agency?`<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700">${esc(S.user.agency)}</span>`:''}
+      ${S.user.agency?`<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold glass-chip text-white">${esc(S.user.agency)}</span>`:''}
       <div class="flex items-center gap-2">
-        <div class="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center">
-          <i class="fas fa-user text-brand-600 text-[10px]"></i>
+        <div class="w-7 h-7 rounded-full bg-white/20 border border-white/20 flex items-center justify-center">
+          <i class="fas fa-user text-white text-[10px]"></i>
         </div>
-        <span class="text-sm font-medium text-gray-700">${S.user.display_name||S.user.username}</span>
+        <span class="text-sm font-medium text-white">${S.user.display_name||S.user.username}</span>
       </div>
-      <button onclick="logout()" class="text-gray-400 hover:text-red-500 transition" title="Logout">
+      <button onclick="logout()" class="text-white/70 hover:text-white transition" title="Logout">
         <i class="fas fa-sign-out-alt"></i>
       </button>
     </div>
@@ -337,10 +537,35 @@ function renderListPage(){
   return `
   ${renderHeader()}
   <div class="p-6 max-w-7xl mx-auto fade-in">
+    <div class="rounded-3xl px-7 py-7 mb-6 text-white relative overflow-hidden" style="background:radial-gradient(130% 120% at 0% 0%,#2f68ff 0%,#1e3a5f 45%,#0f2440 100%)">
+      <div class="absolute -top-10 -right-10 w-52 h-52 rounded-full bg-white/10 blur-2xl"></div>
+      <div class="absolute -bottom-20 left-24 w-72 h-72 rounded-full bg-cyan-300/20 blur-3xl"></div>
+      <div class="relative flex flex-col lg:flex-row lg:items-end lg:justify-between gap-5">
+        <div>
+          <p class="text-[11px] uppercase tracking-[0.16em] text-white/70 font-semibold mb-2">Control Center</p>
+          <h1 class="display-title text-3xl sm:text-4xl font-extrabold leading-tight">Scheme Onboarding Workspace</h1>
+          <p class="text-sm text-white/80 mt-2 max-w-2xl">A polished command view for agencies and MTO admins to create, approve, schedule, and monitor onboarding progress.</p>
+        </div>
+        <div class="text-xs px-4 py-2 rounded-full inline-flex items-center gap-2 w-fit border border-white/30 bg-white/10 backdrop-blur">
+          <i class="fas fa-sparkles"></i>
+          Refreshed Experience • ${new Date().toLocaleDateString()}
+        </div>
+      </div>
+    </div>
+
+    <div class="section-wrap mb-5">
+      <div class="kpi-grid" id="schemeKpis">
+        <div class="kpi-card"><div class="kpi-label">Total Schemes</div><div class="kpi-value" id="kpiTotal">0</div><div class="kpi-trend">Across all statuses</div></div>
+        <div class="kpi-card"><div class="kpi-label">Draft</div><div class="kpi-value" id="kpiDraft">0</div><div class="kpi-trend">Pending creator submission</div></div>
+        <div class="kpi-card"><div class="kpi-label">In Approval</div><div class="kpi-value" id="kpiApproval">0</div><div class="kpi-trend">Agency + MTO review stages</div></div>
+        <div class="kpi-card"><div class="kpi-label">Approved</div><div class="kpi-value" id="kpiApproved">0</div><div class="kpi-trend">Ready for onboarding slots</div></div>
+      </div>
+    </div>
+
     <div class="flex items-center justify-between mb-6">
       <div>
         <h2 class="text-xl font-bold text-brand-900">Schemes</h2>
-        <p class="text-sm text-gray-500 mt-0.5">Manage scheme onboarding submissions</p>
+        <p class="text-sm text-slate-500 mt-0.5">Review submissions with a dashboard-style interface</p>
       </div>
       ${hasRole('agency_creator')?`
       <button onclick="createNewScheme()" class="btn-primary text-white px-5 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition">
@@ -353,7 +578,7 @@ function renderListPage(){
         `<button onclick="S.statusFilter='${f}';filterSchemes()" class="px-3 py-1.5 rounded-lg text-xs font-medium transition ${S.statusFilter===f?'bg-brand-600 text-white':'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}">${f==='all'?'All':f.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</button>`
       ).join('')}
     </div>
-    <div id="schemeTable" class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+    <div id="schemeTable" class="modern-card rounded-2xl overflow-hidden transition-shadow">
       <div class="px-5 py-8 text-center text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading schemes...</div>
     </div>
   </div>`;
@@ -380,17 +605,18 @@ function renderSchemeTable(){
   const filtered=S.statusFilter==='all'?S.schemes:S.schemes.filter(s=>s.status===S.statusFilter);
   const showDelete=isAdmin();
   const el=document.getElementById('schemeTable');
+  updateSchemeKpis(S.schemes||[]);
   if(!filtered.length){el.innerHTML='<div class="px-5 py-8 text-center text-gray-400 text-sm">No schemes found</div>';return}
   el.innerHTML=`
   <table class="w-full text-sm">
-    <thead><tr class="bg-surface-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+    <thead><tr class="bg-gradient-to-r from-slate-50 to-white text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
       <th class="px-5 py-3">Scheme</th><th class="px-5 py-3">Code</th><th class="px-5 py-3">Agency</th>
       <th class="px-5 py-3">Status</th><th class="px-5 py-3">Version</th><th class="px-5 py-3">Updated</th>
       ${showDelete?'<th class="px-5 py-3 text-right">Actions</th>':''}
     </tr></thead>
     <tbody class="divide-y divide-gray-50">
       ${filtered.map(s=>`
-      <tr class="hover:bg-surface-50 transition cursor-pointer" onclick="openScheme('${s.id}')">
+      <tr class="hover:bg-blue-50/40 transition cursor-pointer" onclick="openScheme('${s.id}')">
         <td class="px-5 py-3 font-medium text-gray-800">${esc(s.scheme_name||'Untitled')}</td>
         <td class="px-5 py-3 text-gray-500 font-mono text-xs">${esc(s.scheme_code||'-')}</td>
         <td class="px-5 py-3 text-gray-500">${esc(s.agency||'-')}</td>
@@ -405,6 +631,18 @@ function renderSchemeTable(){
       </tr>`).join('')}
     </tbody>
   </table>`;
+}
+
+function updateSchemeKpis(items){
+  const all=items||[];
+  const draft=all.filter(x=>x.status==='draft').length;
+  const approval=all.filter(x=>x.status==='pending_review'||x.status==='pending_final').length;
+  const approved=all.filter(x=>x.status==='approved').length;
+  const bind=(id,val)=>{const n=document.getElementById(id);if(n)n.textContent=String(val)};
+  bind('kpiTotal',all.length);
+  bind('kpiDraft',draft);
+  bind('kpiApproval',approval);
+  bind('kpiApproved',approved);
 }
 
 async function deleteScheme(schemeId){
@@ -519,16 +757,31 @@ function renderUsersPage(){
   ).join('');
   return renderHeader()+`
   <div class="p-6 max-w-5xl mx-auto fade-in">
+    <div class="rounded-2xl mb-6 p-6 text-white relative overflow-hidden" style="background:linear-gradient(135deg,#0f2440 0%,#1e3a5f 55%,#2563eb 100%)">
+      <div class="absolute -top-10 -right-8 w-40 h-40 rounded-full bg-white/10 blur-2xl"></div>
+      <div class="relative">
+        <h2 class="text-2xl font-bold">User Administration</h2>
+        <p class="text-sm text-white/80 mt-1">Manage users, agencies, and role assignments from one console.</p>
+      </div>
+    </div>
     <div class="flex items-center justify-between mb-6">
       <div>
         <h2 class="text-xl font-bold text-brand-900">User Management</h2>
-        <p class="text-sm text-gray-500 mt-0.5">Manage portal users, roles, and agency access</p>
+        <p class="text-sm text-slate-500 mt-0.5">Manage portal users, roles, and agency access</p>
       </div>
       <button onclick="showCreateUserModal()" class="btn-primary text-white px-5 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition">
         <i class="fas fa-user-plus mr-2"></i>Create User
       </button>
     </div>
-    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 mb-4">
+    <div class="section-wrap mb-5">
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">Total Users</div><div class="kpi-value" id="usersTotal">0</div><div class="kpi-trend">All agencies</div></div>
+        <div class="kpi-card"><div class="kpi-label">Active Users</div><div class="kpi-value" id="usersActive">0</div><div class="kpi-trend">Can access portal</div></div>
+        <div class="kpi-card"><div class="kpi-label">Creators</div><div class="kpi-value" id="usersCreators">0</div><div class="kpi-trend">Agency creators assigned</div></div>
+        <div class="kpi-card"><div class="kpi-label">Approvers</div><div class="kpi-value" id="usersApprovers">0</div><div class="kpi-trend">Agency approvers assigned</div></div>
+      </div>
+    </div>
+    <div class="modern-surface rounded-xl p-4 mb-4">
       <div class="flex flex-col sm:flex-row sm:items-center gap-3">
         <label class="text-sm font-medium text-gray-700">Agency:</label>
         <select onchange="S.userAgencyFilter=this.value;renderUsersTable()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
@@ -539,7 +792,7 @@ function renderUsersPage(){
           class="sm:ml-auto border border-gray-300 rounded-lg px-3 py-2 text-sm w-full sm:w-72">
       </div>
     </div>
-    <div id="usersTable" class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+    <div id="usersTable" class="modern-card rounded-xl overflow-hidden">
       <div class="px-5 py-8 text-center text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading users...</div>
     </div>
   </div>`;
@@ -566,6 +819,12 @@ function renderUsersTable(){
     if(aa!==0)return aa;
     return (a.username||'').localeCompare(b.username||'');
   });
+
+  const bind=(id,val)=>{const n=document.getElementById(id);if(n)n.textContent=String(val)};
+  bind('usersTotal',(S.allUsers||[]).length);
+  bind('usersActive',(S.allUsers||[]).filter(u=>u.is_active).length);
+  bind('usersCreators',(S.allUsers||[]).filter(u=>(u.roles||[]).includes('agency_creator')).length);
+  bind('usersApprovers',(S.allUsers||[]).filter(u=>(u.roles||[]).includes('agency_approver')).length);
 
   if(!filtered.length){el.innerHTML='<div class="px-5 py-8 text-center text-gray-400 text-sm">No users found</div>';return}
   const roleBadge=r=>{const c={agency_creator:'bg-blue-50 text-blue-700',agency_approver:'bg-amber-50 text-amber-700',mto_admin:'bg-purple-50 text-purple-700'};
@@ -704,11 +963,30 @@ function renderSchedulingPage(){
   return `
   ${renderHeader()}
   <div id="schedulingRoot" class="fade-in">
-    <div class="px-6 py-3 bg-white border-b border-gray-200 flex items-center gap-3">
-      <h2 class="text-lg font-semibold text-gray-900">
-        <i class="fas fa-calendar-alt mr-2 text-brand-600"></i>Onboarding Schedule
-      </h2>
-      <p class="text-sm text-gray-500 ml-2">View approved onboarding slot bookings</p>
+    <div class="p-6 max-w-7xl mx-auto pb-0">
+      <div class="rounded-3xl px-7 py-7 mb-4 text-white relative overflow-hidden" style="background:radial-gradient(120% 120% at 10% 0%,#7c3aed 0%,#2563eb 45%,#0f2440 100%)">
+        <div class="absolute -top-14 -right-10 w-56 h-56 rounded-full bg-white/10 blur-3xl"></div>
+        <div class="absolute -bottom-20 left-16 w-72 h-72 rounded-full bg-cyan-200/20 blur-3xl"></div>
+        <div class="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+          <div>
+            <p class="text-[11px] uppercase tracking-[0.16em] text-white/70 font-semibold mb-2">Scheduling</p>
+            <h2 class="display-title text-3xl font-extrabold">Onboarding Calendar</h2>
+            <p class="text-sm text-white/80 mt-1">Visual quarterly schedule for approved go-live commitments.</p>
+          </div>
+          <div class="text-xs px-4 py-2 rounded-full border border-white/30 bg-white/10 backdrop-blur w-fit">Quarter View</div>
+        </div>
+      </div>
+    </div>
+    <div class="px-6 py-4 modern-surface flex items-center justify-between gap-4">
+      <div>
+        <h2 class="text-lg font-semibold text-gray-900">
+          <i class="fas fa-calendar-alt mr-2 text-brand-600"></i>Onboarding Schedule
+        </h2>
+        <p class="text-sm text-slate-500 mt-0.5">View approved onboarding slot bookings by quarter</p>
+      </div>
+      <div class="hidden sm:inline-flex text-xs px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold">
+        Calendar Console
+      </div>
     </div>
     <div class="p-6 max-w-7xl mx-auto">
       <div class="mb-6 flex items-center gap-3">
@@ -752,15 +1030,16 @@ function renderSchedulingOverview(data){
   content.innerHTML=data.quarters.map(q=>{
     const colors=getQuarterClass(q.month_name);
     return `
-    <div class="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-      <div class="${colors.bg} ${colors.border} border-b px-4 py-3">
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div class="${colors.bg} ${colors.border} border-b px-4 py-3 flex items-center justify-between">
         <h3 class="font-semibold ${colors.text}">${q.month_name}</h3>
+        <span class="text-[11px] px-2 py-1 rounded-full bg-white/70 border ${colors.border} ${colors.text} font-semibold">${q.bookings.length} bookings</span>
       </div>
       <div class="p-4 space-y-3 max-h-96 overflow-y-auto">
         ${q.bookings.length===0?
           `<p class="text-xs text-gray-400 text-center py-4">No bookings</p>`
           :q.bookings.map(b=>`
-            <div class="border rounded p-3 ${colors.card}">
+            <div class="border rounded-xl p-3 ${colors.card}">
               <div class="font-semibold text-sm text-gray-800">${esc(b.scheme_name||'Unknown')}</div>
               <div class="text-xs text-gray-600 mt-1">${esc(b.agency||'')}</div>
               <div class="text-xs text-gray-500 mt-2">
@@ -837,13 +1116,19 @@ function renderDetailPage(){
   return `
   ${renderHeader()}
   <div id="detailRoot" class="fade-in">
-    <div class="px-6 py-3 bg-white border-b border-gray-200 flex items-center gap-3">
+    <div class="px-6 py-4 modern-surface flex items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
       <button onclick="S.view='list';render()" class="text-gray-400 hover:text-brand-600 transition">
         <i class="fas fa-arrow-left"></i>
       </button>
       <span class="text-sm text-gray-400">Back to Schemes</span>
       <span id="detailTitle" class="text-sm font-semibold text-brand-900 ml-2">Loading...</span>
       <span id="detailBadge" class="ml-2"></span>
+      </div>
+      <div class="hidden md:inline-flex items-center gap-2 text-xs text-slate-500">
+        <i class="fas fa-file-waveform text-brand-500"></i>
+        Scheme Workspace
+      </div>
     </div>
     <div id="detailBody" class="p-6">
       <div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-brand-400 text-2xl"></i></div>
@@ -876,6 +1161,14 @@ function renderDetailContent(){
           <div class="shrink-0">${statusBadge('draft')}</div>
         </div>
       </div>`:''}
+      <div class="section-wrap mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div class="kpi-card"><div class="kpi-label">Scheme</div><div class="text-sm font-semibold text-slate-800 mt-1 truncate">${esc(d.scheme_name||'Untitled')}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Agency</div><div class="text-sm font-semibold text-slate-800 mt-1">${esc(d.agency||'-')}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Version</div><div class="kpi-value" style="font-size:1.2rem">${d.version||1}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Status</div><div class="text-sm font-semibold text-slate-800 mt-1">${statusBadge(d.status)}</div></div>
+        </div>
+      </div>
       <div class="flex border-b border-gray-200 mb-6 overflow-x-auto">
         ${TAB_LABELS.map((t,i)=>`
         <button onclick="switchTab(${i})" class="tab-btn whitespace-nowrap px-4 py-3 text-sm transition ${i===S.activeTab?'active':''}">
@@ -883,7 +1176,7 @@ function renderDetailContent(){
           ${tabHasData(i)?'<i class="fas fa-check-circle text-emerald-500 ml-1.5 text-xs"></i>':''}
         </button>`).join('')}
       </div>
-      <div id="tabContent" class="bg-white rounded-xl border border-gray-100 shadow-sm p-6"></div>
+      <div id="tabContent" class="bg-white rounded-2xl border border-gray-100 shadow-sm p-6"></div>
       ${canEdit?`<div class="mt-4 flex justify-end gap-2">
         ${showDraftTools?`<button onclick="saveDraftOnly()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-2.5 rounded-lg text-sm font-semibold transition">
           <i class="fas fa-save mr-2"></i>Save Draft
