@@ -1,0 +1,16 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+coverage/
+htmlcov/
+.env
+.env.*
+*.log
+/tmp/
+db.sqlite3
+homes_onboarding.db

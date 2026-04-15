@@ -1,0 +1,1892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HOMES Schemes Onboarding</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<script>
+tailwind.config={theme:{extend:{colors:{
+brand:{50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e3a5f',900:'#0f2440'},
+surface:{50:'#f8fafc',100:'#f1f5f9',200:'#e2e8f0'}
+}}}}
+
+</script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+*{font-family:'Inter',system-ui,sans-serif}
+.fade-in{animation:fadeIn .25s ease-out}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.btn-primary{background:linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%)}
+.btn-primary:hover{background:linear-gradient(135deg,#1d4ed8 0%,#1e40af 100%)}
+.toast{animation:slideIn .3s ease-out}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+.modal-overlay{background:rgba(15,36,64,.5);backdrop-filter:blur(4px)}
+input:focus,select:focus,textarea:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+.tab-btn.active{color:#2563eb;border-bottom:2px solid #2563eb;font-weight:600}
+.tab-btn:not(.active){color:#6b7280;border-bottom:2px solid transparent}
+.tab-btn:hover:not(.active){color:#374151}
+.tooltip-trigger:hover .tooltip-box{display:block}
+.collapsible-body{max-height:0;overflow:hidden;transition:max-height .3s ease}
+.collapsible-body.open{max-height:5000px}
+.status-draft{background:#fef3c7;color:#92400e}
+.status-pending_review{background:#dbeafe;color:#1e40af}
+.status-pending_final{background:#e0e7ff;color:#3730a3}
+.status-approved{background:#d1fae5;color:#065f46}
+.status-rejected{background:#fee2e2;color:#991b1b}
+</style>
+</head>
+<body class="bg-surface-50 text-gray-800">
+
+<div id="toasts" class="fixed top-4 right-4 z-[60] flex flex-col gap-2"></div>
+
+<div id="app"></div>
+
+<div id="modalRoot" class="fixed inset-0 z-50 hidden">
+<div class="modal-overlay absolute inset-0" onclick="closeModal()"></div>
+<div class="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
+<div id="modalContent" class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto fade-in pointer-events-auto"></div>
+</div>
+</div>
+
+<script>
+// ════════════════════════════════════════
+// STATE
+// ════════════════════════════════════════
+function parseStoredUser(){
+  try{return JSON.parse(localStorage.getItem('homes_user')||'null')}
+  catch(_){localStorage.removeItem('homes_user');return null}
+}
+
+let S={
+  token:localStorage.getItem('homes_token')||null,
+  user:parseStoredUser(),
+  view:'list', // list, detail, users
+  schemes:[],
+  currentScheme:null,
+  currentSchemeData:null,
+  activeTab:0,
+  comments:[],
+  changes:[],
+  statusFilter:'all',
+  tabData:{},
+  allUsers:[],
+  agencies:[],
+  userAgencyFilter:'all',
+  userAgencySearch:'',
+  slots:[],
+  slotNotifications:[],
+  selectedSlotYear:null
+};
+
+// Role helpers
+function hasRole(...roles){return S.user&&roles.some(r=>(S.user.roles||[]).includes(r))}
+function isAdmin(){return hasRole('mto_admin')}
+
+const TABS=['overview','mt_parameters','transactions','homes_functions','mt_bands','api_interfaces'];
+const TAB_LABELS=['Scheme Overview','MT Parameters','Transaction Details','HOMES Functions','MT Bands','API & Batch Interfaces'];
+const TAB_ICONS=['fa-file-alt','fa-cog','fa-exchange-alt','fa-puzzle-piece','fa-sliders-h','fa-plug'];
+// ════════════════════════════════════════
+// API
+// ════════════════════════════════════════
+async function api(path,opts={}){
+  const h={'Content-Type':'application/json'};
+  if(S.token)h['Authorization']='Bearer '+S.token;
+  const res=await fetch(path,{headers:h,...opts,body:opts.body?JSON.stringify(opts.body):undefined});
+  if(res.status===204)return null;
+  const json=await res.json().catch(()=>null);
+  if(!res.ok)throw new Error(json?.detail||json?.message||'Request failed');
+  return json;
+}
+
+async function ensureAgenciesLoaded(){
+  if(S.agencies&&S.agencies.length)return S.agencies;
+  try{S.agencies=await api('/api/auth/agencies')}catch(_){S.agencies=[]}
+  return S.agencies;
+}
+
+function toast(msg,type='success'){
+  const d=document.createElement('div');
+  const c={success:'bg-emerald-500',error:'bg-red-500',info:'bg-brand-500'};
+  d.className=`toast px-4 py-2.5 rounded-lg text-white text-sm font-medium shadow-lg ${c[type]||c.info}`;
+  d.innerHTML=`<i class="fas fa-${type==='success'?'check-circle':type==='error'?'exclamation-circle':'info-circle'} mr-2"></i>${msg}`;
+  document.getElementById('toasts').appendChild(d);
+  setTimeout(()=>d.remove(),3500);
+}
+
+// ════════════════════════════════════════
+// AUTH
+// ════════════════════════════════════════
+async function doLogin(e){
+  e.preventDefault();
+  const u=e.target.username.value,p=e.target.password.value;
+  try{
+    const r=await api('/api/auth/login',{method:'POST',body:{username:u,password:p}});
+    S.token=r.token;S.user=r.user;
+    localStorage.setItem('homes_token',r.token);
+    localStorage.setItem('homes_user',JSON.stringify(r.user));
+    toast('Welcome, '+S.user.display_name);
+    render();
+  }catch(err){toast(err.message,'error')}
+}
+
+function logout(){
+  S.token=null;S.user=null;S.view='list';S.schemes=[];S.currentScheme=null;
+  localStorage.removeItem('homes_token');localStorage.removeItem('homes_user');
+  render();
+}
+
+// ════════════════════════════════════════
+// RENDERING
+// ════════════════════════════════════════
+async function render(){
+  try{
+    const app=document.getElementById('app');
+    if(!S.token||!S.user){app.innerHTML=renderLogin();return}
+    if(S.view==='list'){app.innerHTML=renderListPage();loadSchemes();loadSchedulingData()}
+    else if(S.view==='detail'){app.innerHTML=renderDetailPage()}
+    else if(S.view==='scheduling'){app.innerHTML=renderSchedulingPage()}
+    else if(S.view==='users'){await ensureAgenciesLoaded();app.innerHTML=renderUsersPage();loadUsers()}
+  }catch(e){
+    console.error('Render error:', e);
+    document.getElementById('app').innerHTML=`<div style="padding:20px;color:red;font-family:monospace"><strong>Error:</strong> ${e.message}</div>`;
+  }
+}
+
+// ── LOGIN ──
+function renderLogin(){
+  return `
+  <div class="min-h-screen flex" style="background:#0f2440">
+    <!-- Left Panel: Gov Branding -->
+    <div class="hidden lg:flex lg:w-1/2 relative overflow-hidden flex-col justify-between p-12"
+      style="background:linear-gradient(160deg,#0f2440 0%,#1e3a5f 40%,#2563eb 100%)">
+      <div class="relative z-10">
+        <div class="flex items-center gap-3 mb-2">
+          <div class="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center backdrop-blur">
+            <i class="fas fa-shield-alt text-white"></i>
+          </div>
+          <span class="text-white/70 text-xs font-semibold tracking-widest uppercase">Ministry of Health</span>
+        </div>
+      </div>
+      <div class="relative z-10">
+        <div class="w-20 h-20 rounded-2xl bg-white/10 backdrop-blur flex items-center justify-center mb-8 border border-white/10">
+          <i class="fas fa-home text-white text-3xl"></i>
+        </div>
+        <h1 class="text-5xl font-bold text-white leading-tight mb-4">HOMES</h1>
+        <p class="text-xl text-brand-200 font-light mb-2">Household Means-Testing &amp; Eligibility System</p>
+        <p class="text-sm text-white/50 max-w-md leading-relaxed mt-6">Scheme Onboarding Portal for government agencies to configure means-testing parameters, subsidy bands, and system interfaces.</p>
+        <div class="flex gap-6 mt-10">
+          <div class="text-center">
+            <div class="text-2xl font-bold text-white">6</div>
+            <div class="text-[10px] text-white/40 uppercase tracking-wider mt-0.5">Setup Tabs</div>
+          </div>
+          <div class="w-px bg-white/10"></div>
+          <div class="text-center">
+            <div class="text-2xl font-bold text-white">3</div>
+            <div class="text-[10px] text-white/40 uppercase tracking-wider mt-0.5">Approval Stages</div>
+          </div>
+          <div class="w-px bg-white/10"></div>
+          <div class="text-center">
+            <div class="text-2xl font-bold text-white">39</div>
+            <div class="text-[10px] text-white/40 uppercase tracking-wider mt-0.5">API Interfaces</div>
+          </div>
+        </div>
+      </div>
+      <div class="relative z-10 flex items-center gap-2 text-white/30 text-xs">
+        <i class="fas fa-lock text-[10px]"></i>
+        <span>Secured Government System &mdash; Authorized Access Only</span>
+      </div>
+      <!-- Decorative circles -->
+      <div class="absolute -top-20 -right-20 w-96 h-96 rounded-full border border-white/5"></div>
+      <div class="absolute -bottom-32 -left-32 w-[500px] h-[500px] rounded-full border border-white/5"></div>
+      <div class="absolute top-1/3 right-10 w-64 h-64 rounded-full bg-brand-500/10 blur-3xl"></div>
+    </div>
+
+    <!-- Right Panel: Login Form -->
+    <div class="flex-1 flex items-center justify-center p-6 lg:p-12 bg-white">
+      <div class="fade-in w-full max-w-sm">
+        <!-- Mobile branding (hidden on desktop) -->
+        <div class="lg:hidden text-center mb-8">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-900 mb-3">
+            <i class="fas fa-home text-white text-xl"></i>
+          </div>
+          <h1 class="text-xl font-bold text-brand-900">HOMES</h1>
+          <p class="text-xs text-gray-400">Scheme Onboarding Portal</p>
+        </div>
+
+        <div class="mb-8">
+          <h2 class="text-2xl font-bold text-brand-900 mb-1">Welcome back</h2>
+          <p class="text-sm text-gray-400">Sign in to access the Scheme Onboarding Portal</p>
+        </div>
+
+        <form onsubmit="doLogin(event)" class="space-y-5">
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Username</label>
+            <div class="relative">
+              <i class="fas fa-user absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
+              <input name="username" type="text" required placeholder="Enter your username"
+                class="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-3 text-sm transition bg-surface-50 focus:bg-white">
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Password</label>
+            <div class="relative">
+              <i class="fas fa-lock absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
+              <input name="password" type="password" required placeholder="Enter your password"
+                class="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-3 text-sm transition bg-surface-50 focus:bg-white">
+            </div>
+          </div>
+          <button type="submit" class="w-full text-white py-3 rounded-xl text-sm font-semibold shadow-lg transition hover:shadow-xl active:scale-[0.98]"
+            style="background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%)">
+            Sign In <i class="fas fa-arrow-right ml-2"></i>
+          </button>
+        </form>
+
+        <div class="mt-8 p-4 rounded-xl bg-surface-50 border border-gray-100">
+          <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Demo Credentials</p>
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-gray-500 font-mono">moh_creator</span>
+              <div><span class="px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-semibold">Agency Creator</span> <span class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-[10px] font-semibold">MOH</span></div>
+            </div>
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-gray-500 font-mono">moh_approver</span>
+              <div><span class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-semibold">Agency Approver</span> <span class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-[10px] font-semibold">MOH</span></div>
+            </div>
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-gray-500 font-mono">moe_user</span>
+              <div><span class="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-[10px] font-semibold">Creator + Approver</span> <span class="px-2 py-0.5 rounded-full bg-teal-50 text-teal-600 text-[10px] font-semibold">MOE</span></div>
+            </div>
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-gray-500 font-mono">mto_admin</span>
+              <div><span class="px-2 py-0.5 rounded-full bg-purple-50 text-purple-600 text-[10px] font-semibold">MTO Admin</span> <span class="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-semibold">All Agencies</span></div>
+            </div>
+            <p class="text-[10px] text-gray-300 mt-1">Password for all: <span class="font-mono">password</span></p>
+          </div>
+        </div>
+
+        <p class="text-center text-[10px] text-gray-300 mt-6">&copy; 2026 Ministry of Health, Singapore. All rights reserved.</p>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── HEADER ──
+function renderHeader(){
+  const roleLabels={agency_creator:'Agency Creator',agency_approver:'Agency Approver',mto_admin:'MTO Admin'};
+  const roleTags=(S.user.roles||[]).map(r=>`<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-brand-50 text-brand-700">${roleLabels[r]||r}</span>`).join(' ');
+  return `
+  <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between sticky top-0 z-20">
+    <div class="flex items-center gap-4">
+      <div class="flex items-center gap-3 cursor-pointer" onclick="S.view='list';render()">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center">
+          <i class="fas fa-home text-white text-sm"></i>
+        </div>
+        <div>
+          <span class="text-sm font-bold text-brand-900">HOMES</span>
+          <span class="text-xs text-gray-400 ml-1">Scheme Onboarding</span>
+        </div>
+      </div>
+      <nav class="hidden sm:flex items-center gap-1 ml-4">
+        <button onclick="S.view='list';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='list'||S.view==='detail'?'bg-brand-50 text-brand-700':'text-gray-500 hover:bg-gray-50'}">
+          <i class="fas fa-layer-group mr-1"></i>Schemes
+        </button>
+        <button onclick="S.view='scheduling';S.schedulingYear=new Date().getFullYear();render();loadSchedulingOverview()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='scheduling'?'bg-brand-50 text-brand-700':'text-gray-500 hover:bg-gray-50'}">
+          <i class="fas fa-calendar-alt mr-1"></i>Scheduling
+        </button>
+        ${isAdmin()?`
+        <button onclick="S.view='users';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='users'?'bg-brand-50 text-brand-700':'text-gray-500 hover:bg-gray-50'}">
+          <i class="fas fa-users-cog mr-1"></i>User Management
+        </button>`:''}
+      </nav>
+    </div>
+    <div class="flex items-center gap-3">
+      <div class="hidden md:flex items-center gap-1">${roleTags}</div>
+      ${S.user.agency?`<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700">${esc(S.user.agency)}</span>`:''}
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center">
+          <i class="fas fa-user text-brand-600 text-[10px]"></i>
+        </div>
+        <span class="text-sm font-medium text-gray-700">${S.user.display_name||S.user.username}</span>
+      </div>
+      <button onclick="logout()" class="text-gray-400 hover:text-red-500 transition" title="Logout">
+        <i class="fas fa-sign-out-alt"></i>
+      </button>
+    </div>
+  </header>`;
+}
+
+// ── STATUS BADGE ──
+function statusBadge(st){
+  const m={draft:['Draft','bg-amber-50 text-amber-700 border-amber-200'],
+    pending_review:['Pending Review','bg-blue-50 text-blue-700 border-blue-200'],
+    pending_final:['Pending Final','bg-indigo-50 text-indigo-700 border-indigo-200'],
+    approved:['Approved','bg-emerald-50 text-emerald-700 border-emerald-200'],
+    rejected:['Rejected','bg-red-50 text-red-700 border-red-200']};
+  const[label,cls]=m[st]||[st,'bg-gray-100 text-gray-600 border-gray-200'];
+  return `<span class="px-2.5 py-1 rounded-full text-xs font-medium border ${cls}">${label}</span>`;
+}
+
+// ════════════════════════════════════════
+// SCHEME LIST PAGE
+// ════════════════════════════════════════
+function renderListPage(){
+  return `
+  ${renderHeader()}
+  <div class="p-6 max-w-7xl mx-auto fade-in">
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h2 class="text-xl font-bold text-brand-900">Schemes</h2>
+        <p class="text-sm text-gray-500 mt-0.5">Manage scheme onboarding submissions</p>
+      </div>
+      ${hasRole('agency_creator')?`
+      <button onclick="createNewScheme()" class="btn-primary text-white px-5 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition">
+        <i class="fas fa-plus mr-2"></i>New Scheme
+      </button>`:''}
+    </div>
+    <div id="schedulePanel" class="mb-6"></div>
+    <div class="flex gap-2 mb-4" id="filterBar">
+      ${['all','draft','pending_review','pending_final','approved','rejected'].map(f=>
+        `<button onclick="S.statusFilter='${f}';filterSchemes()" class="px-3 py-1.5 rounded-lg text-xs font-medium transition ${S.statusFilter===f?'bg-brand-600 text-white':'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}">${f==='all'?'All':f.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</button>`
+      ).join('')}
+    </div>
+    <div id="schemeTable" class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      <div class="px-5 py-8 text-center text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading schemes...</div>
+    </div>
+  </div>`;
+}
+
+async function loadSchemes(){
+  try{
+    S.schemes=await api('/api/schemes');
+    renderSchemeTable();
+  }catch(e){
+    document.getElementById('schemeTable').innerHTML=`<div class="px-5 py-8 text-center text-red-500 text-sm">${e.message}</div>`;
+  }
+}
+
+function filterSchemes(){
+  document.querySelectorAll('#filterBar button').forEach((b,i)=>{
+    const f=['all','draft','pending_review','pending_final','approved','rejected'][i];
+    b.className=`px-3 py-1.5 rounded-lg text-xs font-medium transition ${S.statusFilter===f?'bg-brand-600 text-white':'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`;
+  });
+  renderSchemeTable();
+}
+
+function renderSchemeTable(){
+  const filtered=S.statusFilter==='all'?S.schemes:S.schemes.filter(s=>s.status===S.statusFilter);
+  const showDelete=isAdmin();
+  const el=document.getElementById('schemeTable');
+  if(!filtered.length){el.innerHTML='<div class="px-5 py-8 text-center text-gray-400 text-sm">No schemes found</div>';return}
+  el.innerHTML=`
+  <table class="w-full text-sm">
+    <thead><tr class="bg-surface-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+      <th class="px-5 py-3">Scheme</th><th class="px-5 py-3">Code</th><th class="px-5 py-3">Agency</th>
+      <th class="px-5 py-3">Status</th><th class="px-5 py-3">Version</th><th class="px-5 py-3">Updated</th>
+      ${showDelete?'<th class="px-5 py-3 text-right">Actions</th>':''}
+    </tr></thead>
+    <tbody class="divide-y divide-gray-50">
+      ${filtered.map(s=>`
+      <tr class="hover:bg-surface-50 transition cursor-pointer" onclick="openScheme('${s.id}')">
+        <td class="px-5 py-3 font-medium text-gray-800">${esc(s.scheme_name||'Untitled')}</td>
+        <td class="px-5 py-3 text-gray-500 font-mono text-xs">${esc(s.scheme_code||'-')}</td>
+        <td class="px-5 py-3 text-gray-500">${esc(s.agency||'-')}</td>
+        <td class="px-5 py-3">${statusBadge(s.status)}</td>
+        <td class="px-5 py-3 text-gray-500">${s.version||1}</td>
+        <td class="px-5 py-3 text-gray-400 text-xs">${s.updated_at?new Date(s.updated_at).toLocaleDateString():'-'}</td>
+        ${showDelete?`<td class="px-5 py-3 text-right">
+          <button onclick="event.stopPropagation();deleteScheme('${s.id}')" class="text-red-500 hover:text-red-700 text-xs font-semibold" title="Delete scheme">
+            <i class="fas fa-trash mr-1"></i>Delete
+          </button>
+        </td>`:''}
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+async function deleteScheme(schemeId){
+  if(!isAdmin()){toast('Only MTO Admin can delete schemes','error');return}
+  const scheme=S.schemes.find(x=>x.id===schemeId);
+  const name=scheme?.scheme_name||'this scheme';
+  openModal('Confirm Delete Scheme',`
+    <div class="space-y-4">
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+        <i class="fas fa-triangle-exclamation mr-2"></i>
+        You are about to delete <strong>${esc(name)}</strong>. This action cannot be undone.
+      </div>
+      <div class="flex gap-2">
+        <button onclick="closeModal()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 rounded-lg text-sm font-semibold transition">Cancel</button>
+        <button onclick="doDeleteScheme('${schemeId}')" class="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+          <i class="fas fa-trash mr-1"></i>Delete Permanently
+        </button>
+      </div>
+    </div>`);
+}
+
+async function doDeleteScheme(schemeId){
+  try{
+    await api(`/api/schemes/${schemeId}`,{method:'DELETE'});
+    closeModal();
+    toast('Scheme deleted');
+    await loadSchemes();
+  }catch(e){toast(e.message,'error')}
+}
+
+async function loadSchedulingData(){
+  // This function used to load scheduling data, but now slot selection is integrated into schemes
+  // Keep it minimal to avoid errors
+  const panel=document.getElementById('schedulePanel');
+  if(!panel)return;
+  
+  try{
+    // Slot selection is now part of scheme detail, so nothing to load here
+    panel.innerHTML='';
+  }catch(e){
+    if(panel)panel.innerHTML=`<div class="bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl px-4 py-3">${esc(e.message)}</div>`;
+  }
+}
+
+function fmtDateTime(iso){
+  if(!iso)return '-';
+  const d=new Date(iso);
+  return d.toLocaleString([], {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function fmtDate(iso){
+  if(!iso)return '-';
+  const d=new Date(iso+'T00:00:00');
+  return d.toLocaleDateString([], {year:'numeric',month:'short',day:'numeric'});
+}
+
+// (Legacy onboarding panel functions removed - slot management is now in scheme detail via renderSlotPanel)
+
+
+
+
+function esc(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):''}
+
+// ── CREATE NEW SCHEME ──
+async function createNewScheme(){
+  await ensureAgenciesLoaded();
+  const agencyOptions=(S.agencies||[]).map(a=>a.code);
+  openModal('New Scheme',`
+  <form onsubmit="submitNewScheme(event)" class="space-y-4">
+    ${mSelect('Agency','agency',agencyOptions,S.user?.agency||'')}
+    ${mf('Full Name of Scheme/Fund','scheme_name','','text',true,'Displayed on emails, letters and HOMES eService')}
+    ${mf('Scheme Code','scheme_code','','text',true,'Agency acronym followed by Scheme acronym, e.g. MOH_SchemeA')}
+    ${mSelect('Legislated or Consent','legislated_or_consent',['Legislated','Consent'])}
+    ${mSelect('Consent Scope','consent_scope',['Agency-specific + All-scheme','Single-scheme + All-scheme','Not Applicable'])}
+    ${mta('Background Info','background_info','')}
+    <button type="submit" class="btn-primary w-full text-white py-2.5 rounded-lg text-sm font-semibold">
+      <i class="fas fa-plus mr-2"></i>Create Scheme
+    </button>
+  </form>`);
+}
+
+async function submitNewScheme(e){
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const body=Object.fromEntries(fd.entries());
+  // background_info as JSON object
+  if(body.background_info){
+    try{body.background_info={notes:body.background_info}}catch(e){}
+  } else { delete body.background_info; }
+  try{
+    const r=await api('/api/schemes',{method:'POST',body});
+    toast('Scheme created in draft mode');
+    closeModal();
+    S.currentScheme=r.id;
+    S.currentSchemeData=null;
+    S.comments=[];
+    S.changes=[];
+    S.activeTab=0;
+    S.tabData={};
+    S.view='detail';
+    render();
+    await loadSchemeDetail();
+  }catch(err){toast(err.message,'error')}
+}
+
+// ════════════════════════════════════════
+// USER MANAGEMENT PAGE
+// ════════════════════════════════════════
+function renderUsersPage(){
+  const agencyOptions=(S.agencies||[]).map(a=>
+    `<option value="${esc(a.code)}" ${S.userAgencyFilter===a.code?'selected':''}>${esc(a.code)} — ${esc(a.name)}</option>`
+  ).join('');
+  return renderHeader()+`
+  <div class="p-6 max-w-5xl mx-auto fade-in">
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h2 class="text-xl font-bold text-brand-900">User Management</h2>
+        <p class="text-sm text-gray-500 mt-0.5">Manage portal users, roles, and agency access</p>
+      </div>
+      <button onclick="showCreateUserModal()" class="btn-primary text-white px-5 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition">
+        <i class="fas fa-user-plus mr-2"></i>Create User
+      </button>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 mb-4">
+      <div class="flex flex-col sm:flex-row sm:items-center gap-3">
+        <label class="text-sm font-medium text-gray-700">Agency:</label>
+        <select onchange="S.userAgencyFilter=this.value;renderUsersTable()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
+          <option value="all" ${S.userAgencyFilter==='all'?'selected':''}>All agencies</option>
+          ${agencyOptions}
+        </select>
+        <input type="text" value="${esc(S.userAgencySearch||'')}" oninput="S.userAgencySearch=this.value;renderUsersTable()" placeholder="Search agency (code or name)"
+          class="sm:ml-auto border border-gray-300 rounded-lg px-3 py-2 text-sm w-full sm:w-72">
+      </div>
+    </div>
+    <div id="usersTable" class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      <div class="px-5 py-8 text-center text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading users...</div>
+    </div>
+  </div>`;
+}
+
+async function loadUsers(){
+  try{
+    S.allUsers=await api('/api/auth/users');
+    renderUsersTable();
+  }catch(e){document.getElementById('usersTable').innerHTML=`<div class="px-5 py-8 text-center text-red-500 text-sm">${e.message}</div>`}
+}
+
+function renderUsersTable(){
+  const el=document.getElementById('usersTable');
+  const search=(S.userAgencySearch||'').trim().toLowerCase();
+  const byAgency=(S.allUsers||[]).filter(u=>S.userAgencyFilter==='all'||(u.agency||'')===S.userAgencyFilter);
+  const filtered=byAgency.filter(u=>{
+    if(!search)return true;
+    const code=(u.agency||'').toLowerCase();
+    const name=((S.agencies||[]).find(a=>a.code===u.agency)?.name||'').toLowerCase();
+    return code.includes(search)||name.includes(search);
+  }).sort((a,b)=>{
+    const aa=(a.agency||'').localeCompare(b.agency||'');
+    if(aa!==0)return aa;
+    return (a.username||'').localeCompare(b.username||'');
+  });
+
+  if(!filtered.length){el.innerHTML='<div class="px-5 py-8 text-center text-gray-400 text-sm">No users found</div>';return}
+  const roleBadge=r=>{const c={agency_creator:'bg-blue-50 text-blue-700',agency_approver:'bg-amber-50 text-amber-700',mto_admin:'bg-purple-50 text-purple-700'};
+    return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${c[r]||'bg-gray-100 text-gray-600'}">${r.replace(/_/g,' ')}</span>`};
+  el.innerHTML=`
+  <table class="w-full text-sm">
+    <thead><tr class="bg-surface-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+      <th class="px-5 py-3">User</th><th class="px-5 py-3">Username</th><th class="px-5 py-3">Agency</th>
+      <th class="px-5 py-3">Roles</th><th class="px-5 py-3">Status</th><th class="px-5 py-3 text-right">Actions</th>
+    </tr></thead>
+    <tbody class="divide-y divide-gray-50">
+      ${filtered.map(u=>`
+      <tr class="hover:bg-surface-50 transition">
+        <td class="px-5 py-3">
+          <div class="flex items-center gap-2">
+            <div class="w-7 h-7 rounded-full ${u.is_active?'bg-brand-100':'bg-gray-100'} flex items-center justify-center">
+              <i class="fas fa-user ${u.is_active?'text-brand-600':'text-gray-400'} text-[10px]"></i>
+            </div>
+            <span class="font-medium text-gray-800">${esc(u.display_name)}</span>
+          </div>
+        </td>
+        <td class="px-5 py-3 text-gray-500 font-mono text-xs">${esc(u.username)}</td>
+        <td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700">${esc(u.agency||'-')}</span></td>
+        <td class="px-5 py-3"><div class="flex flex-wrap gap-1">${(u.roles||[]).map(roleBadge).join('')}</div></td>
+        <td class="px-5 py-3">${u.is_active?'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">Active</span>':'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700">Inactive</span>'}</td>
+        <td class="px-5 py-3 text-right">
+          <button onclick="showEditUserModal('${u.id}')" class="text-brand-500 hover:text-brand-700 mr-2"><i class="fas fa-pen text-xs"></i></button>
+          <button onclick="toggleUserActive('${u.id}',${!u.is_active})" class="${u.is_active?'text-red-400 hover:text-red-600':'text-emerald-400 hover:text-emerald-600'}" title="${u.is_active?'Deactivate':'Activate'}">
+            <i class="fas fa-${u.is_active?'ban':'check-circle'} text-xs"></i>
+          </button>
+        </td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+async function showCreateUserModal(){
+  await ensureAgenciesLoaded();
+  const allRoles=['agency_creator','agency_approver','mto_admin'];
+  const agencyOptions=(S.agencies||[]).map(a=>`<option value="${esc(a.code)}">${esc(a.code)} — ${esc(a.name)}</option>`).join('');
+  openModal('Create User',`
+  <form onsubmit="createUser(event)" class="space-y-4">
+    ${mf('Username','username','','text',true)}
+    ${mf('Password','password','','password',true)}
+    ${mf('Display Name','display_name','','text',true)}
+    <div>
+      <label class="block text-xs font-medium text-gray-600 mb-1">Agency</label>
+      <select name="agency" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white transition">
+        <option value="">-- Select agency --</option>
+        ${agencyOptions}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-600 mb-2">Roles</label>
+      <div class="space-y-2">
+        ${allRoles.map(r=>`<label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="roles" value="${r}" class="w-4 h-4 rounded border-gray-300 text-brand-600">
+          <span>${r.replace(/_/g,' ')}</span>
+        </label>`).join('')}
+      </div>
+    </div>
+    <button type="submit" class="btn-primary w-full text-white py-2.5 rounded-lg text-sm font-semibold">
+      <i class="fas fa-user-plus mr-2"></i>Create User
+    </button>
+  </form>`);
+}
+
+async function createUser(e){
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const roles=[...fd.getAll('roles')];
+  const body={username:fd.get('username'),password:fd.get('password'),display_name:fd.get('display_name'),agency:fd.get('agency')||null,roles};
+  try{
+    await api('/api/auth/users',{method:'POST',body});
+    toast('User created');closeModal();loadUsers();
+  }catch(err){toast(err.message,'error')}
+}
+
+async function showEditUserModal(userId){
+  await ensureAgenciesLoaded();
+  const u=S.allUsers.find(x=>x.id===userId);if(!u)return;
+  const allRoles=['agency_creator','agency_approver','mto_admin'];
+  const agencyOptions=(S.agencies||[]).map(a=>`<option value="${esc(a.code)}" ${u.agency===a.code?'selected':''}>${esc(a.code)} — ${esc(a.name)}</option>`).join('');
+  openModal('Edit User: '+u.display_name,`
+  <form onsubmit="updateUser(event,'${u.id}')" class="space-y-4">
+    ${mf('Display Name','display_name',u.display_name,'text',true)}
+    <div>
+      <label class="block text-xs font-medium text-gray-600 mb-1">Agency</label>
+      <select name="agency" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white transition">
+        ${agencyOptions}
+      </select>
+    </div>
+    ${mf('New Password (leave blank to keep)','password','','password',false)}
+    <div>
+      <label class="block text-xs font-medium text-gray-600 mb-2">Roles</label>
+      <div class="space-y-2">
+        ${allRoles.map(r=>`<label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="roles" value="${r}" ${(u.roles||[]).includes(r)?'checked':''} class="w-4 h-4 rounded border-gray-300 text-brand-600">
+          <span>${r.replace(/_/g,' ')}</span>
+        </label>`).join('')}
+      </div>
+    </div>
+    <label class="flex items-center gap-2 text-sm">
+      <input type="checkbox" name="is_active" ${u.is_active?'checked':''} class="w-4 h-4 rounded border-gray-300 text-brand-600">
+      <span>Active</span>
+    </label>
+    <button type="submit" class="btn-primary w-full text-white py-2.5 rounded-lg text-sm font-semibold">
+      <i class="fas fa-save mr-2"></i>Save Changes
+    </button>
+  </form>`);
+}
+
+async function updateUser(e,userId){
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const roles=[...fd.getAll('roles')];
+  const body={display_name:fd.get('display_name'),agency:fd.get('agency')||null,roles,is_active:!!fd.get('is_active')};
+  const pw=fd.get('password');if(pw)body.password=pw;
+  try{
+    await api(`/api/auth/users/${userId}`,{method:'PUT',body});
+    toast('User updated');closeModal();loadUsers();
+  }catch(err){toast(err.message,'error')}
+}
+
+async function toggleUserActive(userId,active){
+  try{
+    await api(`/api/auth/users/${userId}`,{method:'PUT',body:{is_active:active}});
+    toast(active?'User activated':'User deactivated');loadUsers();
+  }catch(err){toast(err.message,'error')}
+}
+
+// ════════════════════════════════════════
+// SCHEDULING PAGE
+// ════════════════════════════════════════
+function renderSchedulingPage(){
+  return `
+  ${renderHeader()}
+  <div id="schedulingRoot" class="fade-in">
+    <div class="px-6 py-3 bg-white border-b border-gray-200 flex items-center gap-3">
+      <h2 class="text-lg font-semibold text-gray-900">
+        <i class="fas fa-calendar-alt mr-2 text-brand-600"></i>Onboarding Schedule
+      </h2>
+      <p class="text-sm text-gray-500 ml-2">View approved onboarding slot bookings</p>
+    </div>
+    <div class="p-6 max-w-7xl mx-auto">
+      <div class="mb-6 flex items-center gap-3">
+        <label class="text-sm font-medium text-gray-700">Year:</label>
+        <select id="yearSelector" onchange="S.schedulingYear=parseInt(this.value);loadSchedulingOverview()" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">
+          ${[new Date().getFullYear(),new Date().getFullYear()+1,new Date().getFullYear()+2].map(y=>`<option value="${y}" ${y===S.schedulingYear?'selected':''}>${y}</option>`).join('')}
+        </select>
+      </div>
+      <div id="schedulingContent" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-brand-400 text-2xl"></i></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadSchedulingOverview(){
+  try{
+    const data=await api(`/api/scheduling/overview/${S.schedulingYear||new Date().getFullYear()}`);
+    renderSchedulingOverview(data);
+  }catch(e){
+    toast(e.message,'error');
+    document.getElementById('schedulingContent').innerHTML=`<div class="text-red-500">Error loading schedule: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderSchedulingOverview(data){
+  const content=document.getElementById('schedulingContent');
+  if(!content)return;
+  
+  // Color mapping for quarters - hardcoded for Tailwind safety
+  const getQuarterClass=(month)=>{
+    const colorMap={
+      'January':{bg:'bg-blue-50',border:'border-blue-200',text:'text-blue-900',card:'bg-blue-50 border-blue-100'},
+      'April':{bg:'bg-purple-50',border:'border-purple-200',text:'text-purple-900',card:'bg-purple-50 border-purple-100'},
+      'July':{bg:'bg-green-50',border:'border-green-200',text:'text-green-900',card:'bg-green-50 border-green-100'},
+      'November':{bg:'bg-orange-50',border:'border-orange-200',text:'text-orange-900',card:'bg-orange-50 border-orange-100'}
+    };
+    return colorMap[month]||{bg:'bg-gray-50',border:'border-gray-200',text:'text-gray-900',card:'bg-gray-50 border-gray-100'};
+  };
+  
+  content.innerHTML=data.quarters.map(q=>{
+    const colors=getQuarterClass(q.month_name);
+    return `
+    <div class="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+      <div class="${colors.bg} ${colors.border} border-b px-4 py-3">
+        <h3 class="font-semibold ${colors.text}">${q.month_name}</h3>
+      </div>
+      <div class="p-4 space-y-3 max-h-96 overflow-y-auto">
+        ${q.bookings.length===0?
+          `<p class="text-xs text-gray-400 text-center py-4">No bookings</p>`
+          :q.bookings.map(b=>`
+            <div class="border rounded p-3 ${colors.card}">
+              <div class="font-semibold text-sm text-gray-800">${esc(b.scheme_name||'Unknown')}</div>
+              <div class="text-xs text-gray-600 mt-1">${esc(b.agency||'')}</div>
+              <div class="text-xs text-gray-500 mt-2">
+                <i class="fas fa-gears mr-1"></i>Tech: ${b.technical_go_live}
+                <br>
+                <i class="fas fa-briefcase mr-1"></i>Biz: ${b.business_go_live}
+              </div>
+              ${isAdmin()&&b.submission_id?`
+                <div class="mt-3 pt-2 border-t border-gray-200">
+                  <button onclick="confirmDeleteScheduleScheme('${b.submission_id}','${esc((b.scheme_name||'Unknown').replace(/'/g,"\\'"))}')" class="text-red-600 hover:text-red-700 text-xs font-semibold">
+                    <i class="fas fa-trash mr-1"></i>Delete Scheme
+                  </button>
+                </div>
+              `:''}
+            </div>
+          `).join('')
+        }
+      </div>
+    </div>
+    `;
+  }).join('');
+}
+
+function confirmDeleteScheduleScheme(submissionId,schemeName){
+  if(!isAdmin()){toast('Only MTO Admin can delete schemes','error');return}
+  openModal('Confirm Delete Scheme',`
+    <div class="space-y-4">
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+        <i class="fas fa-triangle-exclamation mr-2"></i>
+        Delete <strong>${esc(schemeName||'this scheme')}</strong> from the system? This action cannot be undone.
+      </div>
+      <div class="flex gap-2">
+        <button onclick="closeModal()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 rounded-lg text-sm font-semibold transition">Cancel</button>
+        <button onclick="doDeleteScheduleScheme('${submissionId}')" class="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+          <i class="fas fa-trash mr-1"></i>Delete Permanently
+        </button>
+      </div>
+    </div>`);
+}
+
+async function doDeleteScheduleScheme(submissionId){
+  try{
+    await api(`/api/schemes/${submissionId}`,{method:'DELETE'});
+    closeModal();
+    toast('Scheme deleted');
+    await loadSchedulingOverview();
+    if(S.view==='list')await loadSchemes();
+  }catch(e){toast(e.message,'error')}
+}
+
+
+// ════════════════════════════════════════
+// SCHEME DETAIL PAGE
+// ════════════════════════════════════════
+async function openScheme(id){
+  S.currentScheme=id;S.activeTab=0;S.view='detail';S.tabData={};
+  render();
+  await loadSchemeDetail();
+}
+
+async function loadSchemeDetail(){
+  try{
+    const[data,comments,changes]=await Promise.all([
+      api(`/api/schemes/${S.currentScheme}`),
+      api(`/api/schemes/${S.currentScheme}/comments`).catch(()=>[]),
+      api(`/api/schemes/${S.currentScheme}/changes`).catch(()=>[])
+    ]);
+    S.currentSchemeData=data;S.comments=comments||[];S.changes=changes||[];
+    renderDetailContent();
+  }catch(e){toast(e.message,'error');S.view='list';render()}
+}
+
+function renderDetailPage(){
+  return `
+  ${renderHeader()}
+  <div id="detailRoot" class="fade-in">
+    <div class="px-6 py-3 bg-white border-b border-gray-200 flex items-center gap-3">
+      <button onclick="S.view='list';render()" class="text-gray-400 hover:text-brand-600 transition">
+        <i class="fas fa-arrow-left"></i>
+      </button>
+      <span class="text-sm text-gray-400">Back to Schemes</span>
+      <span id="detailTitle" class="text-sm font-semibold text-brand-900 ml-2">Loading...</span>
+      <span id="detailBadge" class="ml-2"></span>
+    </div>
+    <div id="detailBody" class="p-6">
+      <div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-brand-400 text-2xl"></i></div>
+    </div>
+  </div>`;
+}
+
+function renderDetailContent(){
+  const d=S.currentSchemeData;if(!d)return;
+  document.getElementById('detailTitle').textContent=d.scheme_name||'Untitled Scheme';
+  document.getElementById('detailBadge').innerHTML=statusBadge(d.status);
+
+  const canEdit=
+    (hasRole('mto_admin')) ||
+    (hasRole('agency_creator')&&(d.status==='draft'||d.status==='rejected')) ||
+    (hasRole('agency_approver')&&(d.status==='pending_review'||d.status==='rejected'));
+  const showDraftTools=hasRole('agency_creator')&&(d.status==='draft'||d.status==='rejected');
+
+  document.getElementById('detailBody').innerHTML=`
+  <div class="flex gap-6 max-w-[1400px] mx-auto">
+    <!-- MAIN TABS -->
+    <div class="flex-1 min-w-0">
+      ${showDraftTools?`
+      <div class="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-sm font-semibold text-amber-900"><i class="fas fa-file-pen mr-2"></i>Draft Mode</div>
+            <p class="text-xs text-amber-800 mt-1">This scheme is still in draft. You can save your progress now and come back later before submitting for review.</p>
+          </div>
+          <div class="shrink-0">${statusBadge('draft')}</div>
+        </div>
+      </div>`:''}
+      <div class="flex border-b border-gray-200 mb-6 overflow-x-auto">
+        ${TAB_LABELS.map((t,i)=>`
+        <button onclick="switchTab(${i})" class="tab-btn whitespace-nowrap px-4 py-3 text-sm transition ${i===S.activeTab?'active':''}">
+          <i class="fas ${TAB_ICONS[i]} mr-1.5 text-xs"></i>${t}
+          ${tabHasData(i)?'<i class="fas fa-check-circle text-emerald-500 ml-1.5 text-xs"></i>':''}
+        </button>`).join('')}
+      </div>
+      <div id="tabContent" class="bg-white rounded-xl border border-gray-100 shadow-sm p-6"></div>
+      ${canEdit?`<div class="mt-4 flex justify-end gap-2">
+        ${showDraftTools?`<button onclick="saveDraftOnly()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-2.5 rounded-lg text-sm font-semibold transition">
+          <i class="fas fa-save mr-2"></i>Save Draft
+        </button>`:''}
+        <button onclick="saveCurrentTab()" class="btn-primary text-white px-6 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition">
+          <i class="fas fa-save mr-2"></i>Save Tab
+        </button>
+      </div>`:''}
+    </div>
+    <!-- APPROVAL PANEL + SLOT PANEL -->
+    <div class="w-80 flex-shrink-0 space-y-4">
+      ${renderSlotPanel(d,canEdit)}
+      ${renderApprovalPanel(d,canEdit)}
+    </div>
+  </div>`;
+
+  renderTabContent();
+}
+
+function tabHasData(i){
+  const d=S.currentSchemeData;if(!d)return false;
+  if(i===0)return !!(d.agency||d.scheme_name);
+  const tn=TABS[i];
+  return d[tn]&&typeof d[tn]==='object'&&Object.keys(d[tn]).length>0;
+}
+
+function switchTab(i){S.activeTab=i;
+  document.querySelectorAll('.tab-btn').forEach((b,j)=>{b.classList.toggle('active',j===i)});
+  renderTabContent();
+}
+
+function isReadOnly(){
+  const d=S.currentSchemeData;
+  if(!d)return true;
+  if(hasRole('mto_admin'))return false;
+  if(hasRole('agency_creator')&&(d.status==='draft'||d.status==='rejected'))return false;
+  if(hasRole('agency_approver')&&(d.status==='pending_review'||d.status==='rejected'))return false;
+  return true;
+}
+
+function ro(){return isReadOnly()?'disabled':''}
+
+// ════════════════════════════════════════
+// TAB RENDERERS
+// ════════════════════════════════════════
+function renderTabContent(){
+  const el=document.getElementById('tabContent');
+  if(!el)return;
+  const fns=[renderTab0,renderTab1,renderTab2,renderTab3,renderTab4,renderTab5];
+  el.innerHTML=fns[S.activeTab]();
+}
+
+// Helper: info tooltip
+function tip(text){
+  if(!text)return '';
+  return `<span class="tooltip-trigger relative inline-block ml-1 cursor-help">
+    <i class="fas fa-info-circle text-brand-400 text-xs"></i>
+    <span class="tooltip-box hidden absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-white border border-gray-200 rounded-lg shadow-lg text-xs text-gray-600 font-normal z-30">${esc(text)}</span>
+  </span>`;
+}
+
+// Helper: form field
+function ff(label,key,val,type='text',tipText='',extra=''){
+  const v=val??'';const r=ro();
+  return `<div class="${extra}">
+    <label class="block text-xs font-medium text-gray-600 mb-1">${label}${tip(tipText)}</label>
+    <input type="${type}" data-field="${key}" value="${esc(String(v))}" ${r}
+      class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm transition disabled:bg-gray-50 disabled:text-gray-500" ${type==='number'?'step="any"':''}>
+  </div>`;
+}
+
+function fta(label,key,val,tipText='',rows=3){
+  const v=val??'';const r=ro();
+  return `<div>
+    <label class="block text-xs font-medium text-gray-600 mb-1">${label}${tip(tipText)}</label>
+    <textarea data-field="${key}" rows="${rows}" ${r}
+      class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm transition disabled:bg-gray-50 disabled:text-gray-500">${esc(String(v))}</textarea>
+  </div>`;
+}
+
+function fsel(label,key,options,val,tipText=''){
+  const r=ro();
+  return `<div>
+    <label class="block text-xs font-medium text-gray-600 mb-1">${label}${tip(tipText)}</label>
+    <select data-field="${key}" ${r} class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white transition disabled:bg-gray-50 disabled:text-gray-500">
+      <option value="">-- Select --</option>
+      ${options.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}
+    </select>
+  </div>`;
+}
+
+function fyn(label,key,val,tipText=''){
+  return fsel(label,key,['Yes','No'],val,tipText);
+}
+
+function sectionHead(title,icon){
+  return `<div class="flex items-center gap-2 pt-6 pb-3 border-b border-gray-100 mb-4 first:pt-0">
+    <i class="fas ${icon||'fa-folder'} text-brand-500 text-sm"></i>
+    <h3 class="text-sm font-semibold text-brand-900">${title}</h3>
+  </div>`;
+}
+
+function getTabData(tabName){
+  const d=S.currentSchemeData;
+  if(!d)return {};
+  if(tabName==='overview')return d;
+  // Ensure tab data object persists so mutations (addBandRow etc.) are kept
+  if(!d[tabName]||typeof d[tabName]!=='object')d[tabName]={};
+  return d[tabName];
+}
+
+// ── TAB 0: SCHEME OVERVIEW ──
+function renderTab0(){
+  const d=S.currentSchemeData||{};
+  const bg=d.background_info||{};
+  const isBg=typeof bg==='object';
+  const consent=d.legislated_or_consent==='Consent';
+  return `
+  ${sectionHead('Scheme Information','fa-info-circle')}
+  <div class="grid grid-cols-2 gap-4">
+    ${ff('Agency','agency',d.agency,'text','Organisation which owns the scheme')}
+    ${ff('Full Name of Scheme/Fund','scheme_name',d.scheme_name,'text','Displayed on emails, letters and HOMES eService')}
+    ${ff('Scheme Code','scheme_code',d.scheme_code,'text','Agency acronym followed by Scheme acronym, e.g. MOH_SchemeA')}
+    ${fsel('Legislated or Consent','legislated_or_consent',['Legislated','Consent'],d.legislated_or_consent)}
+  </div>
+  <div id="consentScopeWrap" class="mt-4 ${consent?'':'hidden'}">
+    ${fsel('Consent Scope','consent_scope',['Agency-specific + All-scheme','Single-scheme + All-scheme','Not Applicable'],d.consent_scope,'Applicable when Consent is selected')}
+  </div>
+
+  ${sectionHead('Background Information','fa-book')}
+  <div class="space-y-4">
+    ${ff('Organisation which Established the Fund/Scheme','bg_org_established',isBg?bg.org_established:'')}
+    ${fta('Purpose of Fund/Scheme','bg_purpose',isBg?bg.purpose:'')}
+    ${ff('Source of Funding','bg_funding_source',isBg?bg.funding_source:'')}
+    ${ff('Governing body of the Fund/Scheme','bg_governing_body',isBg?bg.governing_body:'')}
+    ${ff('Organisation which sets eligibility criteria','bg_eligibility_org',isBg?bg.eligibility_org:'')}
+    ${fta('Organisation(s) which evaluates applications','bg_eval_orgs',isBg?bg.eval_orgs:'')}
+    ${fta('Third parties receiving data','bg_third_parties',isBg?bg.third_parties:'','If yes, provide types of information passed on')}
+    ${ff('Group Schemes name','bg_group_name',isBg?bg.group_name:'','e.g. HDB Schemes, IMDA Schemes')}
+    ${ff('Scheme Logo info','bg_logo_info',isBg?bg.logo_info:'')}
+  </div>`;
+}
+
+// ── TAB 1: MT PARAMETERS ──
+function renderTab1(){
+  const d=getTabData('mt_parameters');
+  const memberStatuses=['Overseas Studying','Overseas Working','Nursing Home','Incarcerated','Incarcerated Overseas','Deceased','Relocated Overseas','No longer in contact','Missing','Estranged'];
+  const mtcTypes=['Related','Nuclear','Parent-Guardian','Immediate Family','Free-form'];
+
+  function mtcSection(name,key){
+    const sec=d[key]||{};
+    return `
+    <div class="border border-gray-200 rounded-lg mb-3">
+      <button type="button" onclick="toggleCollapsible(this)" class="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition rounded-lg">
+        <span><i class="fas fa-chevron-right text-xs mr-2 transition-transform collapsible-icon"></i>${name} MTC</span>
+        <span class="text-xs text-gray-400">${sec.used||'Not configured'}</span>
+      </button>
+      <div class="collapsible-body px-4 pb-4">
+        <div class="grid grid-cols-2 gap-4 mb-4">
+          ${fyn('Used by scheme?',key+'_used',sec.used)}
+          ${fsel('Whose construct?',key+'_construct',['Applicant','Beneficiary'],sec.construct)}
+        </div>
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-gray-600 mb-2">Member Status Grid <span class="text-gray-400">(Standardised across all schemes)</span></label>
+          <div class="border border-gray-200 rounded-lg overflow-hidden">
+            <table class="w-full text-xs">
+              <thead><tr class="bg-surface-50"><th class="px-3 py-2 text-left">Status</th><th class="px-3 py-2 text-left">Inclusion</th></tr></thead>
+              <tbody class="divide-y divide-gray-100">
+                ${memberStatuses.map(ms=>`<tr>
+                  <td class="px-3 py-1.5 text-gray-600">${ms}</td>
+                  <td class="px-3 py-1.5"><span class="text-xs text-gray-400 italic">Standardised</span></td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        ${fyn('Allow deviation from MTC?',key+'_deviation',sec.deviation)}
+      </div>
+    </div>`;
+  }
+
+  return `
+  ${sectionHead('Beneficiary & Applicant','fa-users')}
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    ${fyn('Same person as applicant?','same_as_applicant',d.same_as_applicant)}
+    ${ff('If No, relationship description','relationship_desc',d.relationship_desc)}
+  </div>
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    ${fsel('Beneficiary Residence Status','residence_status',['SCs Only','SCs & PRs','SCs & PRs & Foreigners','PRs & Foreigners'],d.residence_status)}
+    ${ff('Foreigner pass types (if applicable)','foreigner_pass_types',d.foreigner_pass_types)}
+  </div>
+
+  ${sectionHead('MTC Types','fa-sitemap')}
+  ${mtcTypes.map((t,i)=>mtcSection(t,['related','nuclear','parent_guardian','immediate_family','freeform'][i])).join('')}
+
+  ${sectionHead('Income Components','fa-dollar-sign')}
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    ${fyn('Employment','income_employment',d.income_employment)}
+    ${fyn('Trade','income_trade',d.income_trade)}
+    ${fyn('Investments','income_investments',d.income_investments)}
+    ${fyn('Rental','income_rental',d.income_rental)}
+  </div>
+
+  ${sectionHead('Income Rollup','fa-calculator')}
+  ${fsel('Income Rollup','income_rollup',['Per Capita and Gross','Per Capita only','Gross only','MTC not used'],d.income_rollup)}
+
+  ${sectionHead('Property','fa-building')}
+  <div class="grid grid-cols-2 gap-4">
+    ${fsel('Annual Value (AV) used?','av_used',['Yes','AV not used'],d.av_used)}
+    ${fsel('Market Price (MP) used?','mp_used',['Yes','MP not used'],d.mp_used)}
+  </div>`;
+}
+
+// ── TAB 2: TRANSACTION DETAILS ──
+function renderTab2(){
+  const d=getTabData('transactions');
+  const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `
+  ${sectionHead('Connecting to HOMES','fa-link')}
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    ${fyn('HOMES Portal (Internet-CorpPass)','portal_corppass',d.portal_corppass)}
+    ${ff('No. of Organisations via CorpPass','num_orgs_corppass',d.num_orgs_corppass,'number')}
+    ${fyn('HOMES Portal (Intranet)','portal_intranet',d.portal_intranet)}
+    ${ff('No. of Organisations via Intranet','num_orgs_intranet',d.num_orgs_intranet,'number')}
+    ${fyn('Batch SFTP','batch_sftp',d.batch_sftp)}
+    ${fyn('Real time APEX-API','realtime_apex',d.realtime_apex)}
+    ${fsel('Scheduled Reports delivery','sched_reports_delivery',['Retrieve from HOMES Portal','Drop to SFTP as well'],d.sched_reports_delivery)}
+    ${ff('Required scheduled reports','required_sched_reports',d.required_sched_reports)}
+  </div>
+
+  ${sectionHead('System Interfaces','fa-server')}
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    ${ff('No. systems via intranet SFTP','sys_intranet_sftp',d.sys_intranet_sftp,'number')}
+    ${ff('No. systems via intranet API','sys_intranet_api',d.sys_intranet_api,'number')}
+    ${ff('No. systems via internet SFTP','sys_internet_sftp',d.sys_internet_sftp,'number')}
+    ${ff('No. systems via internet API','sys_internet_api',d.sys_internet_api,'number')}
+    ${fsel('Interfacing system status','iface_status',['Existing System','New System (Developing)','New System (To be developed)'],d.iface_status)}
+    ${ff('Estimated ready date','iface_ready_date',d.iface_ready_date,'date')}
+  </div>
+  ${ff('Name of interfacing systems','iface_names',d.iface_names)}
+
+  ${sectionHead('Load Description','fa-chart-bar')}
+  ${ff('Annual MT applications','annual_mt_apps',d.annual_mt_apps,'number')}
+  <div class="mt-4">
+    <label class="block text-xs font-medium text-gray-600 mb-2">Monthly Breakdown</label>
+    <div class="grid grid-cols-6 gap-2">
+      ${months.map((m,i)=>`<div>
+        <label class="block text-[10px] text-gray-400 mb-0.5 text-center">${m}</label>
+        <input type="number" data-field="month_${i+1}" value="${d['month_'+(i+1)]||''}" ${ro()}
+          class="w-full border border-gray-200 rounded px-2 py-1.5 text-xs text-center transition disabled:bg-gray-50">
+      </div>`).join('')}
+    </div>
+  </div>
+  <div class="grid grid-cols-2 gap-4 mt-4">
+    ${ff('Manual reconciliation %','manual_recon_pct',d.manual_recon_pct)}
+    ${ff('Max concurrent users/hr','max_concurrent_users',d.max_concurrent_users,'number')}
+  </div>
+  ${fta('Reconciliation breakdown','recon_breakdown',d.recon_breakdown)}
+
+  ${sectionHead('Volume Estimates','fa-tachometer-alt')}
+  ${['SFTP','API','Portal','Bulk Query'].map(cat=>{
+    const k=cat.toLowerCase().replace(/ /g,'_');
+    return `<div class="mb-4">
+      <label class="block text-xs font-semibold text-gray-700 mb-2">${cat}</label>
+      <div class="grid grid-cols-2 gap-4">
+        ${ff('Peak Volume','vol_'+k+'_peak',d['vol_'+k+'_peak'],'number')}
+        ${ff('Average Volume','vol_'+k+'_avg',d['vol_'+k+'_avg'],'number')}
+      </div>
+    </div>`;
+  }).join('')}`;
+}
+
+// ── TAB 3: HOMES FUNCTIONS ──
+function renderTab3(){
+  const d=getTabData('homes_functions');
+  const mtcList=['Related','Nuclear','Parent-Guardian','IFM'];
+  const events=[
+    ['EV001','Change in Marital Status'],['EV002','Change in Address'],['EV003','Change in Citizenship'],
+    ['EV004','Change in Income'],['EV005','Death of Member'],['EV006','New Birth'],
+    ['EV007','Change in Employment'],['EV008','Change in Property Ownership'],['EV009','Change in Vehicle Ownership'],
+    ['EV010','Change in Education Status'],['EV011','Change in NS Status'],['EV012','Immigration Status Change'],
+    ['EV013','Incarceration Event'],['EV014','Hospitalisation Event']
+  ];
+  return `
+  ${sectionHead('MTC Viewing','fa-eye')}
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    ${mtcList.map(m=>fyn(m+' MTC','view_'+m.toLowerCase().replace(/-/g,'_'),d['view_'+m.toLowerCase().replace(/-/g,'_')])).join('')}
+  </div>
+
+  ${sectionHead('MT Result Viewing','fa-poll')}
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    ${fyn('Allow other schemes to view?','allow_others_view',d.allow_others_view)}
+    ${fyn('Can view other schemes\' results?','can_view_others',d.can_view_others)}
+  </div>
+  <label class="block text-xs font-medium text-gray-600 mb-2">For which MTCs?</label>
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    ${mtcList.map(m=>fyn(m,'result_'+m.toLowerCase().replace(/-/g,'_'),d['result_'+m.toLowerCase().replace(/-/g,'_')])).join('')}
+  </div>
+
+  ${sectionHead('Scheme Affiliation','fa-handshake')}
+  ${fta('Affiliated schemes list','affiliated_schemes',d.affiliated_schemes)}
+  ${fyn('Read MSHL computed result?','read_mshl',d.read_mshl)}
+
+  ${sectionHead('Event Triggers','fa-bell')}
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    ${fyn('Subscribe to notifications?','subscribe_notifications',d.subscribe_notifications)}
+    ${fsel('Beneficiary list scope','beneficiary_scope',['All individuals','Specific List','Not Applicable'],d.beneficiary_scope)}
+  </div>
+  <div class="border border-gray-200 rounded-lg overflow-hidden mb-4">
+    <table class="w-full text-xs">
+      <thead><tr class="bg-surface-50"><th class="px-3 py-2 text-left">Event</th><th class="px-3 py-2 text-left">Description</th><th class="px-3 py-2 text-left w-48">Action</th></tr></thead>
+      <tbody class="divide-y divide-gray-100">
+        ${events.map(([code,desc])=>`<tr>
+          <td class="px-3 py-1.5 font-mono text-gray-600">${code}</td>
+          <td class="px-3 py-1.5 text-gray-600">${desc}</td>
+          <td class="px-3 py-1.5">
+            <select data-field="event_${code}" ${ro()} class="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
+              <option value="">--</option>
+              ${['Auto-MT them','Notify me','Do nothing'].map(o=>`<option ${d['event_'+code]===o?'selected':''}>${o}</option>`).join('')}
+            </select>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>
+
+  ${sectionHead('Auto-MT','fa-robot')}
+  <div class="grid grid-cols-2 gap-4">
+    ${fsel('Auto-MT subscription?','auto_mt_sub',['Yes','No','Not Applicable'],d.auto_mt_sub)}
+    ${fsel('Cohort basis?','cohort_basis',['Required','Not required'],d.cohort_basis)}
+  </div>`;
+}
+
+// ── TAB 4: MT BANDS ──
+function renderTab4(){
+  const d=getTabData('mt_bands');
+  const bands=Array.isArray(d.bands)?d.bands:[];
+  const rankings=Array.isArray(d.rankings)?d.rankings:[];
+  return `
+  ${sectionHead('Subsidy Bands','fa-layer-group')}
+  <div class="overflow-x-auto mb-4">
+    <table class="w-full text-xs" id="bandsTable">
+      <thead><tr class="bg-surface-50 text-left">
+        <th class="px-2 py-2">MTC Type</th><th class="px-2 py-2">Rollup</th><th class="px-2 py-2">Start</th><th class="px-2 py-2">End</th>
+        <th class="px-2 py-2">Inc Min</th><th class="px-2 py-2">Inc Max</th><th class="px-2 py-2">AV Min</th><th class="px-2 py-2">AV Max</th>
+        <th class="px-2 py-2">Multi Prop</th><th class="px-2 py-2">ID Type</th><th class="px-2 py-2">Band Name</th>
+        <th class="px-2 py-2">Buffer</th><th class="px-2 py-2">Inc Label</th><th class="px-2 py-2">AV Label</th>
+        ${isReadOnly()?'':'<th class="px-2 py-2"></th>'}
+      </tr></thead>
+      <tbody id="bandsBody">
+        ${bands.map((b,i)=>bandRow(b,i)).join('')}
+        ${bands.length===0?`<tr><td colspan="15" class="px-3 py-4 text-center text-gray-400">No bands added yet</td></tr>`:''}
+      </tbody>
+    </table>
+  </div>
+  ${isReadOnly()?'':`<button onclick="addBandRow()" class="text-sm text-brand-600 hover:text-brand-700 font-medium"><i class="fas fa-plus mr-1"></i>Add Row</button>`}
+
+  ${sectionHead('Subsidy Ranking','fa-sort-amount-down')}
+  <div class="overflow-x-auto mb-4">
+    <table class="w-full text-xs" id="rankingsTable">
+      <thead><tr class="bg-surface-50 text-left">
+        <th class="px-3 py-2">Start Date</th><th class="px-3 py-2">End Date</th><th class="px-3 py-2">Subsidy Band</th><th class="px-3 py-2">Ranking</th>
+        ${isReadOnly()?'':'<th class="px-3 py-2"></th>'}
+      </tr></thead>
+      <tbody id="rankingsBody">
+        ${rankings.map((r,i)=>rankRow(r,i)).join('')}
+        ${rankings.length===0?`<tr><td colspan="5" class="px-3 py-4 text-center text-gray-400">No rankings added yet</td></tr>`:''}
+      </tbody>
+    </table>
+  </div>
+  ${isReadOnly()?'':`<button onclick="addRankRow()" class="text-sm text-brand-600 hover:text-brand-700 font-medium"><i class="fas fa-plus mr-1"></i>Add Ranking</button>`}`;
+}
+
+function bandRow(b,i){
+  const r=ro();
+  return `<tr class="border-b border-gray-100" data-band="${i}">
+    <td class="px-1 py-1"><input data-band-field="mtc_type" value="${esc(b.mtc_type||'')}" ${r} class="w-24 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><select data-band-field="rollup" ${r} class="w-16 border border-gray-200 rounded px-1 py-1 text-xs bg-white disabled:bg-gray-50">
+      <option ${b.rollup==='GI'?'selected':''}>GI</option><option ${b.rollup==='PCI'?'selected':''}>PCI</option></select></td>
+    <td class="px-1 py-1"><input type="date" data-band-field="start_date" value="${b.start_date||''}" ${r} class="w-28 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><input type="date" data-band-field="end_date" value="${b.end_date||''}" ${r} class="w-28 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><input type="number" data-band-field="income_min" value="${b.income_min??''}" ${r} class="w-20 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><input type="number" data-band-field="income_max" value="${b.income_max??''}" ${r} class="w-20 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><input type="number" data-band-field="av_min" value="${b.av_min??''}" ${r} class="w-20 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><input type="number" data-band-field="av_max" value="${b.av_max??''}" ${r} class="w-20 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><select data-band-field="multi_prop" ${r} class="w-14 border border-gray-200 rounded px-1 py-1 text-xs bg-white disabled:bg-gray-50">
+      <option ${b.multi_prop==='Yes'?'selected':''}>Yes</option><option ${b.multi_prop==='No'?'selected':''}>No</option></select></td>
+    <td class="px-1 py-1"><input data-band-field="id_type" value="${esc(b.id_type||'')}" ${r} class="w-20 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><input data-band-field="band_name" value="${esc(b.band_name||'')}" maxlength="20" ${r} class="w-24 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><input type="number" data-band-field="income_buffer" value="${b.income_buffer??''}" ${r} class="w-16 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><input data-band-field="income_label" value="${esc(b.income_label||'')}" ${r} class="w-20 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-1 py-1"><input data-band-field="av_label" value="${esc(b.av_label||'')}" ${r} class="w-20 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"></td>
+    ${isReadOnly()?'':`<td class="px-1 py-1"><button onclick="removeBandRow(${i})" class="text-red-400 hover:text-red-600"><i class="fas fa-trash text-xs"></i></button></td>`}
+  </tr>`;
+}
+
+function rankRow(r,i){
+  const dis=ro();
+  return `<tr class="border-b border-gray-100" data-rank="${i}">
+    <td class="px-2 py-1"><input type="date" data-rank-field="start_date" value="${r.start_date||''}" ${dis} class="w-full border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-2 py-1"><input type="date" data-rank-field="end_date" value="${r.end_date||''}" ${dis} class="w-full border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-2 py-1"><input data-rank-field="band" value="${esc(r.band||'')}" ${dis} class="w-full border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
+    <td class="px-2 py-1"><input type="number" data-rank-field="ranking" value="${r.ranking??''}" ${dis} class="w-full border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
+    ${isReadOnly()?'':`<td class="px-2 py-1"><button onclick="removeRankRow(${i})" class="text-red-400 hover:text-red-600"><i class="fas fa-trash text-xs"></i></button></td>`}
+  </tr>`;
+}
+
+function addBandRow(){
+  const d=getTabData('mt_bands');
+  if(!d.bands)d.bands=[];
+  d.bands.push({});
+  renderTabContent();
+}
+function removeBandRow(i){
+  const d=getTabData('mt_bands');
+  d.bands.splice(i,1);
+  renderTabContent();
+}
+function addRankRow(){
+  const d=getTabData('mt_bands');
+  if(!d.rankings)d.rankings=[];
+  d.rankings.push({});
+  renderTabContent();
+}
+function removeRankRow(i){
+  const d=getTabData('mt_bands');
+  d.rankings.splice(i,1);
+  renderTabContent();
+}
+
+// ── TAB 5: API & BATCH INTERFACES ──
+function renderTab5(){
+  const d=getTabData('api_interfaces');
+  const apis=[
+    ['P12-API1','Submit Consent'],['P12-API2','Invalidate Consent'],['P12-API3','Withdraw Consent'],
+    ['P12-API4','Query Consent'],['P12-API5','Check Consent'],['P12-API6','Submit Enquiry'],
+    ['P12-API7','Get Enquiry Details'],['P12-API8','Query RHH MTC'],['P12-API9','Query NHH MTC'],
+    ['P12-API10','Query PG MTC'],['P12-API11','Query IFM MTC'],['P12-API12','Get MTC by MT ID'],
+    ['P12-API13','Submit MT Request'],['P12-API14','Escalate MT Request'],['P12-API15','Get MT Request Detail'],
+    ['P12-API16','Get Latest MT Result'],['P12-API17','Get MT Result Details'],
+    ['P12-API18','Mapping of MT Result Across Schemes'],['P12-API19','Get Latest MT Result Set'],
+    ['P20-API','Query MSHL MT Result']
+  ];
+  const batches=[
+    ['P13-Batch1','Submit Consent'],['P13-Batch2','Invalidate Consent'],['P13-Batch3','Withdraw Consent'],
+    ['P13-Batch4','Check Consent'],['P13-Batch5','Submit Enquiry'],['P13-Batch6','Get Enquiry Details'],
+    ['P13-Batch7','Completed Enquiries'],['P13-Batch8','Query RHH MTC'],['P13-Batch9','Query NHH MTC'],
+    ['P13-Batch10','Query PG MTC'],['P13-Batch11','Query IFM MTC'],['P13-Batch12','Submit MT Request'],
+    ['P13-Batch13','Escalate MT Request'],['P13-Batch14','Get MT Request Details'],
+    ['P13-Batch15','Completed MT Requests'],['P13-Batch16','Get Latest MT Result'],
+    ['P13-Batch17','Get Latest MT Result Set'],['P13-Batch18','Scheme Beneficiary Delta Interface'],
+    ['P20-Batch','Query Latest MSHL MT Result']
+  ];
+  const sftpItems=[
+    'Submit Supporting Documents - SubmitMTRequest',
+    'Submit Supporting Documents - SubmitConsent',
+    'Submit Supporting Documents - SubmitEnquiry',
+    'Submit Supporting Documents - EscalateMTRequest',
+    'Missing Support Documents',
+    'Unrelated Documents',
+    'Viewing Supporting Document (Document Viewer)'
+  ];
+  const r=ro();
+  return `
+  ${sectionHead('API Interfaces','fa-plug')}
+  <div class="overflow-x-auto mb-6">
+    <table class="w-full text-xs">
+      <thead><tr class="bg-surface-50 text-left">
+        <th class="px-3 py-2">Interface No.</th><th class="px-3 py-2">Name</th><th class="px-3 py-2">Used</th>
+        <th class="px-3 py-2">Avg calls/hr</th><th class="px-3 py-2">Peak calls/hr</th>
+      </tr></thead>
+      <tbody class="divide-y divide-gray-100">
+        ${apis.map(([code,name])=>{
+          const k=code.replace(/-/g,'_');
+          return `<tr>
+            <td class="px-3 py-1.5 font-mono text-gray-500">${code}</td>
+            <td class="px-3 py-1.5 text-gray-700">${name}</td>
+            <td class="px-3 py-1.5"><select data-field="api_${k}_used" ${r} class="border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
+              <option value="">--</option><option ${d['api_'+k+'_used']==='Yes'?'selected':''}>Yes</option><option ${d['api_'+k+'_used']==='No'?'selected':''}>No</option></select></td>
+            <td class="px-3 py-1.5"><input type="number" data-field="api_${k}_avg" value="${d['api_'+k+'_avg']||''}" ${r} class="w-20 border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
+            <td class="px-3 py-1.5"><input type="number" data-field="api_${k}_peak" value="${d['api_'+k+'_peak']||''}" ${r} class="w-20 border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>
+
+  ${sectionHead('Batch Interfaces','fa-database')}
+  <div class="overflow-x-auto mb-6">
+    <table class="w-full text-xs">
+      <thead><tr class="bg-surface-50 text-left">
+        <th class="px-3 py-2">Interface No.</th><th class="px-3 py-2">Name</th><th class="px-3 py-2">Used</th>
+        <th class="px-3 py-2">Avg records/day</th><th class="px-3 py-2">Peak records/day</th>
+      </tr></thead>
+      <tbody class="divide-y divide-gray-100">
+        ${batches.map(([code,name])=>{
+          const k=code.replace(/-/g,'_');
+          return `<tr>
+            <td class="px-3 py-1.5 font-mono text-gray-500">${code}</td>
+            <td class="px-3 py-1.5 text-gray-700">${name}</td>
+            <td class="px-3 py-1.5"><select data-field="batch_${k}_used" ${r} class="border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
+              <option value="">--</option><option ${d['batch_'+k+'_used']==='Yes'?'selected':''}>Yes</option><option ${d['batch_'+k+'_used']==='No'?'selected':''}>No</option></select></td>
+            <td class="px-3 py-1.5"><input type="number" data-field="batch_${k}_avg" value="${d['batch_'+k+'_avg']||''}" ${r} class="w-20 border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
+            <td class="px-3 py-1.5"><input type="number" data-field="batch_${k}_peak" value="${d['batch_'+k+'_peak']||''}" ${r} class="w-20 border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>
+
+  ${sectionHead('SFTP Setups','fa-folder-open')}
+  <div class="space-y-3 mb-4">
+    ${sftpItems.map((item,i)=>`
+    <div class="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-2">
+      <span class="text-xs text-gray-700">${i+1}. ${item}</span>
+      <select data-field="sftp_${i+1}" ${r} class="border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
+        <option value="">--</option><option ${d['sftp_'+(i+1)]==='Yes'?'selected':''}>Yes</option><option ${d['sftp_'+(i+1)]==='No'?'selected':''}>No</option>
+      </select>
+    </div>`).join('')}
+    <div class="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-2">
+      <span class="text-xs text-gray-700">P25 SFTP Download of Scheduled Reports</span>
+      <select data-field="sftp_p25" ${r} class="border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
+        <option value="">--</option><option ${d.sftp_p25==='Yes'?'selected':''}>Yes</option><option ${d.sftp_p25==='No'?'selected':''}>No</option>
+      </select>
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════
+// COLLECT TAB DATA
+// ════════════════════════════════════════
+function collectTabData(){
+  const data={};
+  // Standard fields
+  document.querySelectorAll('#tabContent [data-field]').forEach(el=>{
+    const k=el.dataset.field;
+    if(el.tagName==='SELECT')data[k]=el.value;
+    else if(el.type==='checkbox')data[k]=el.checked;
+    else data[k]=el.value;
+  });
+  // Band rows
+  if(S.activeTab===4){
+    const bands=[];
+    document.querySelectorAll('#bandsBody tr[data-band]').forEach(tr=>{
+      const b={};
+      tr.querySelectorAll('[data-band-field]').forEach(el=>{
+        b[el.dataset.bandField]=el.tagName==='SELECT'?el.value:el.value;
+      });
+      bands.push(b);
+    });
+    data.bands=bands;
+    const rankings=[];
+    document.querySelectorAll('#rankingsBody tr[data-rank]').forEach(tr=>{
+      const r={};
+      tr.querySelectorAll('[data-rank-field]').forEach(el=>{
+        r[el.dataset.rankField]=el.value;
+      });
+      rankings.push(r);
+    });
+    data.rankings=rankings;
+  }
+  return data;
+}
+
+async function saveCurrentTab(showToast=true){
+  const data=collectTabData();
+  const tabName=TABS[S.activeTab];
+  try{
+    if(S.activeTab===0){
+      // Overview tab saves to PUT /api/schemes/{id}
+      const body={
+        agency:data.agency,scheme_name:data.scheme_name,scheme_code:data.scheme_code,
+        legislated_or_consent:data.legislated_or_consent,consent_scope:data.consent_scope,
+        background_info:{
+          org_established:data.bg_org_established,purpose:data.bg_purpose,
+          funding_source:data.bg_funding_source,governing_body:data.bg_governing_body,
+          eligibility_org:data.bg_eligibility_org,eval_orgs:data.bg_eval_orgs,
+          third_parties:data.bg_third_parties,group_name:data.bg_group_name,logo_info:data.bg_logo_info
+        }
+      };
+      await api(`/api/schemes/${S.currentScheme}`,{method:'PUT',body});
+    }else{
+      await api(`/api/schemes/${S.currentScheme}/tab/${tabName}`,{method:'PUT',body:{data}});
+    }
+    if(showToast)toast(TAB_LABELS[S.activeTab]+' saved');
+    await loadSchemeDetail();
+  }catch(e){toast(e.message,'error')}
+}
+
+async function saveDraftOnly(){
+  await saveCurrentTab(false);
+  toast('Draft saved. You can come back later.','info');
+}
+
+// ════════════════════════════════════════
+// APPROVAL PANEL + SLOT SELECTION
+// ════════════════════════════════════════
+
+function renderSlotPanel(d,canEdit){
+  const slots=d.onboarding_slots||[];
+  const primarySlot=slots.find(s=>!s.is_additional);
+  const additionalSlots=slots.filter(s=>s.is_additional);
+  const today=new Date();
+  const currentYear=today.getFullYear();
+  const currentMonth=today.getMonth()+1;
+  
+  // Determine available years (current year + next 2 years)
+  const availableYears=[currentYear,currentYear+1,currentYear+2];
+  
+  // Quarter months
+  const quarterMonths=[
+    {month:1,name:'January'},
+    {month:4,name:'April'},
+    {month:7,name:'July'},
+    {month:11,name:'November'}
+  ];
+  
+  // Check if month is in past
+  const isMonthPast=(year,month)=>{
+    if(year<currentYear)return true;
+    if(year===currentYear&&month<currentMonth)return true;
+    return false;
+  };
+  
+  const isEditingSlot=S.editingSlot===S.currentScheme;
+  const canApproveSlot=(hasRole('agency_approver')&&d.status==='pending_review')||(hasRole('mto_admin')&&d.status==='pending_final');
+  
+  return `
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+    <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+      <i class="fas fa-calendar-check mr-1"></i>Onboarding Slot
+    </h4>
+    
+    ${primarySlot?`
+      <!-- Primary Slot Display -->
+      <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
+        <div class="text-sm font-semibold text-blue-900">${primarySlot.slot_month_name} ${primarySlot.year}</div>
+        <div class="text-xs text-blue-800 mt-2">
+          <i class="fas fa-gears mr-1"></i>Technical: ${primarySlot.technical_go_live}
+          <br>
+          <i class="fas fa-briefcase mr-1"></i>Business: ${primarySlot.business_go_live}
+        </div>
+        ${primarySlot.approval_status!=='approved'?`
+          <div class="text-xs mt-2 px-2 py-1 rounded ${
+            primarySlot.approval_status==='rejected'?'bg-red-100 text-red-700':'bg-amber-100 text-amber-700'
+          }">
+            Status: ${primarySlot.approval_status}
+            ${primarySlot.approver_comment?'<br><i class="fas fa-comment-dots mr-1"></i>'+esc(primarySlot.approver_comment):''}
+          </div>
+        `:''}
+      </div>
+      
+      ${canEdit&&primarySlot.approval_status==='rejected'?`
+        <button onclick="S.editingSlot='${S.currentScheme}';render()" class="w-full text-blue-600 hover:text-blue-700 text-xs font-semibold py-2 transition mb-2">
+          <i class="fas fa-edit mr-1"></i>Edit Slot
+        </button>
+      `:''}
+      
+      ${canApproveSlot&&primarySlot.approval_status==='pending'?`
+        <div class="flex gap-2 mt-2">
+          <button onclick="approveSlot()" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-1.5 rounded transition">
+            <i class="fas fa-check mr-1"></i>Approve
+          </button>
+          <button onclick="rejectSlotModal()" class="flex-1 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold py-1.5 rounded transition">
+            <i class="fas fa-times mr-1"></i>Reject
+          </button>
+        </div>
+      `:''}
+    `:canEdit?`
+      <!-- Slot Selection Form -->
+      <div class="text-xs text-gray-600 mb-3">Select your preferred onboarding slot and go-live dates</div>
+      
+      <!-- Year Selector -->
+      <div class="mb-3">
+        <label class="text-xs font-semibold text-gray-700 block mb-2">Year</label>
+        <select id="slotYear" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs">
+          ${availableYears.map(y=>`<option value="${y}">${y}</option>`).join('')}
+        </select>
+      </div>
+      
+      <!-- Quarter Months -->
+      <div class="mb-3">
+        <label class="text-xs font-semibold text-gray-700 block mb-2">Quarter</label>
+        <div class="grid grid-cols-2 gap-2">
+          ${quarterMonths.map(q=>`
+            <button type="button" onclick="S.selectedSlotMonth=${q.month};render()" 
+              class="p-2 rounded-lg text-xs font-semibold transition ${
+                isMonthPast(parseInt(document.getElementById('slotYear')?.value||currentYear),q.month)?
+                'bg-gray-100 text-gray-400 cursor-not-allowed':'bg-gray-100 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+              } ${S.selectedSlotMonth===q.month?'bg-blue-600 text-white':''}"
+              ${isMonthPast(parseInt(document.getElementById('slotYear')?.value||currentYear),q.month)?'disabled':''}>
+              ${q.name}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+      
+      <!-- Go-Live Dates -->
+      ${S.selectedSlotMonth?`
+        <div class="space-y-2 mb-3">
+          <div>
+            <label class="text-xs font-semibold text-gray-700 block mb-1">Technical Go-Live</label>
+            <input type="date" id="slotTechDate" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs">
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-gray-700 block mb-1">Business Go-Live</label>
+            <input type="date" id="slotBizDate" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs">
+          </div>
+        </div>
+        
+        <button onclick="saveSlot()" class="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-lg transition mb-2">
+          <i class="fas fa-check mr-1"></i>Save Slot
+        </button>
+      `:''}
+    `:''}
+    
+    ${additionalSlots.length>0?`
+      <div class="mt-3 pt-3 border-t border-gray-200">
+        <div class="text-xs font-semibold text-gray-700 mb-2">Additional Slots</div>
+        ${additionalSlots.map(s=>`
+          <div class="bg-amber-50 border border-amber-200 rounded p-2 mb-2 text-xs">
+            <div class="font-semibold text-amber-900">${s.slot_month_name} ${s.year}</div>
+            <div class="text-amber-800 mt-1">${s.justification}</div>
+          </div>
+        `).join('')}
+      </div>
+    `:''}
+  </div>
+  `;
+}
+
+function renderApprovalPanel(d,canEdit){
+  const status=d.status;
+
+  let actions='';
+  if(hasRole('agency_creator')&&(status==='draft'||status==='rejected')){
+    actions=`<button onclick="submitScheme()" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+      <i class="fas fa-paper-plane mr-2"></i>Submit for Review
+    </button>
+    <button onclick="saveDraftOnly()" class="w-full mt-2 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 rounded-lg text-sm font-semibold transition">
+      <i class="fas fa-save mr-2"></i>Save as Draft
+    </button>
+    <p class="text-[11px] text-gray-500 mt-2">Draft mode is supported. Save and return later anytime.</p>`;
+  }else if(hasRole('agency_approver')&&(status==='pending_review'||status==='rejected')){
+    actions=`
+    <button onclick="approveScheme()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-semibold transition mb-2">
+      <i class="fas fa-check mr-2"></i>Approve & Send to MTO
+    </button>
+    ${status==='pending_review'?`<button onclick="showRejectModal()" class="w-full bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+      <i class="fas fa-times mr-2"></i>Reject
+    </button>`:''}`;
+  }else if(hasRole('mto_admin')&&status==='pending_final'){
+    actions=`
+    <button onclick="finalApproveScheme()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-semibold transition mb-2">
+      <i class="fas fa-check-double mr-2"></i>Final Approve
+    </button>
+    <button onclick="showRejectModal()" class="w-full bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+      <i class="fas fa-times mr-2"></i>Reject to Approver
+    </button>`;
+  }
+
+  return `
+  <div class="space-y-4">
+    <!-- Status Card -->
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+      <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Status</h4>
+      <div class="text-center py-2">${statusBadge(status)}</div>
+      ${d.created_by?`<p class="text-xs text-gray-400 mt-3 text-center">Created by: ${esc(d.created_by)}</p>`:''}
+      ${actions?`<div class="mt-4 pt-4 border-t border-gray-100">${actions}</div>`:''}
+    </div>
+
+    <!-- Comments -->
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm">
+      <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+        <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+          <i class="fas fa-comments mr-1"></i>Comments
+        </h4>
+        <span class="text-xs text-gray-400">${S.comments.length}</span>
+      </div>
+      <div class="max-h-64 overflow-y-auto">
+        ${S.comments.length===0?'<div class="px-5 py-4 text-xs text-gray-400 text-center">No comments yet</div>':
+        S.comments.map(c=>`
+        <div class="px-5 py-3 border-b border-gray-50">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-xs font-semibold text-gray-700">${esc(c.user||'Unknown')}</span>
+            ${c.stage?`<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">${esc(c.stage)}</span>`:''}
+          </div>
+          <p class="text-xs text-gray-600">${esc(c.text)}</p>
+          <p class="text-[10px] text-gray-400 mt-1">${c.created_at?new Date(c.created_at).toLocaleString():''}</p>
+        </div>`).join('')}
+      </div>
+      <div class="p-4 border-t border-gray-100">
+        <textarea id="commentInput" rows="2" placeholder="Add a comment..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs transition mb-2"></textarea>
+        <button onclick="addComment()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg text-xs font-medium transition">
+          <i class="fas fa-plus mr-1"></i>Add Comment
+        </button>
+      </div>
+    </div>
+
+    <!-- Changes Log -->
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm">
+      <div class="px-5 py-3 border-b border-gray-100">
+        <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+          <i class="fas fa-history mr-1"></i>Change Log
+        </h4>
+      </div>
+      <div class="max-h-48 overflow-y-auto">
+        ${S.changes.length===0?'<div class="px-5 py-4 text-xs text-gray-400 text-center">No changes recorded</div>':
+        S.changes.map(c=>`
+        <div class="px-5 py-2 border-b border-gray-50">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-medium text-gray-700">${esc(c.tab_name||'')}</span>
+            <span class="text-[10px] text-gray-400">${c.timestamp?new Date(c.timestamp).toLocaleString():''}</span>
+          </div>
+          <p class="text-[10px] text-gray-500">by ${esc(c.changed_by||'')} ${c.changed_by_username?`(${esc(c.changed_by_username)})`:''}</p>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── SLOT MANAGEMENT ──
+async function saveSlot(){
+  const year=parseInt(document.getElementById('slotYear')?.value);
+  const slotMonth=S.selectedSlotMonth;
+  const techDate=document.getElementById('slotTechDate')?.value;
+  const bizDate=document.getElementById('slotBizDate')?.value;
+  
+  if(!year||!slotMonth||!techDate||!bizDate){
+    toast('Please fill in all fields','error');
+    return;
+  }
+  
+  try{
+    await api(`/api/schemes/${S.currentScheme}/slot`,{
+      method:'PUT',
+      body:{year,slot_month:slotMonth,technical_go_live:techDate,business_go_live:bizDate}
+    });
+    toast('Slot saved');
+    S.selectedSlotMonth=null;
+    S.editingSlot=null;
+    await loadSchemeDetail();
+  }catch(e){toast(e.message,'error')}
+}
+
+async function approveSlot(){
+  try{
+    await api(`/api/schemes/${S.currentScheme}/slot/approve`,{
+      method:'POST',
+      body:{approval_status:'approved'}
+    });
+    toast('Slot approved');
+    await loadSchemeDetail();
+  }catch(e){toast(e.message,'error')}
+}
+
+function rejectSlotModal(){
+  openModal('Reject Onboarding Slot',`
+  <div class="space-y-4">
+    <p class="text-sm text-gray-600">Suggest a different onboarding slot, e.g., "Please select July instead of April"</p>
+    <textarea id="slotRejectComment" rows="3" placeholder="Feedback on the selected slot..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm transition"></textarea>
+    <button onclick="doRejectSlot()" class="w-full bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+      <i class="fas fa-times mr-2"></i>Reject Slot
+    </button>
+  </div>`);
+}
+
+async function doRejectSlot(){
+  const comment=document.getElementById('slotRejectComment').value;
+  try{
+    await api(`/api/schemes/${S.currentScheme}/slot/approve`,{
+      method:'POST',
+      body:{approval_status:'rejected',approver_comment:comment}
+    });
+    toast('Slot rejected with feedback');
+    closeModal();
+    await loadSchemeDetail();
+  }catch(e){toast(e.message,'error')}
+}
+
+// ── APPROVAL ACTIONS ──
+async function submitScheme(){
+  try{
+    await api(`/api/schemes/${S.currentScheme}/submit`,{method:'POST'});
+    toast('Scheme submitted for approval');
+    await loadSchemeDetail();
+  }catch(e){toast(e.message,'error')}
+}
+
+async function approveScheme(){
+  try{
+    await api(`/api/schemes/${S.currentScheme}/approve`,{method:'POST'});
+    toast('Scheme approved');
+    await loadSchemeDetail();
+  }catch(e){toast(e.message,'error')}
+}
+
+async function finalApproveScheme(){
+  try{
+    await api(`/api/schemes/${S.currentScheme}/final-approve`,{method:'POST'});
+    toast('Scheme final approved');
+    await loadSchemeDetail();
+  }catch(e){toast(e.message,'error')}
+}
+
+function showRejectModal(){
+  const rejectTarget=hasRole('mto_admin')?'agency approver':'creator';
+  openModal('Reject Scheme',`
+  <div class="space-y-4">
+    <p class="text-sm text-gray-600">Please provide a reason for rejecting this scheme back to the ${rejectTarget}.</p>
+    <textarea id="rejectReason" rows="4" placeholder="Rejection reason or slot suggestion (e.g., 'Please pick July instead')..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm transition"></textarea>
+    <p class="text-xs text-gray-500">This comment will be visible in the slot feedback.</p>
+    <button onclick="doReject()" class="w-full bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+      <i class="fas fa-times mr-2"></i>Confirm Rejection
+    </button>
+  </div>`);
+}
+
+async function doReject(){
+  const comment=document.getElementById('rejectReason').value;
+  try{
+    await api(`/api/schemes/${S.currentScheme}/reject`,{method:'POST',body:{comment}});
+    toast('Scheme rejected');
+    closeModal();
+    await loadSchemeDetail();
+  }catch(e){toast(e.message,'error')}
+}
+
+async function addComment(){
+  const el=document.getElementById('commentInput');
+  const text=el.value.trim();
+  if(!text)return;
+  try{
+    await api(`/api/schemes/${S.currentScheme}/comments`,{method:'POST',body:{text,stage:S.currentSchemeData?.status}});
+    el.value='';
+    toast('Comment added');
+    await loadSchemeDetail();
+  }catch(e){toast(e.message,'error')}
+}
+
+// ════════════════════════════════════════
+// COLLAPSIBLE
+// ════════════════════════════════════════
+function toggleCollapsible(btn){
+  const body=btn.nextElementSibling;
+  const icon=btn.querySelector('.collapsible-icon');
+  body.classList.toggle('open');
+  if(icon)icon.style.transform=body.classList.contains('open')?'rotate(90deg)':'';
+}
+
+// ════════════════════════════════════════
+// CONSENT SCOPE TOGGLE
+// ════════════════════════════════════════
+document.addEventListener('change',function(e){
+  if(e.target.dataset?.field==='legislated_or_consent'){
+    const wrap=document.getElementById('consentScopeWrap');
+    if(wrap)wrap.classList.toggle('hidden',e.target.value!=='Consent');
+  }
+});
+
+// ════════════════════════════════════════
+// MODAL
+// ════════════════════════════════════════
+function mf(label,name,val,type='text',required=false,tipText=''){
+  return `<div>
+    <label class="block text-xs font-medium text-gray-600 mb-1">${label}${tipText?tip(tipText):''}</label>
+    <input type="${type}" name="${name}" value="${esc(String(val||''))}" ${required?'required':''}
+      class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm transition">
+  </div>`;
+}
+function mta(label,name,val){
+  return `<div>
+    <label class="block text-xs font-medium text-gray-600 mb-1">${label}</label>
+    <textarea name="${name}" rows="3" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm transition">${esc(String(val||''))}</textarea>
+  </div>`;
+}
+function mSelect(label,name,options,val=''){
+  return `<div>
+    <label class="block text-xs font-medium text-gray-600 mb-1">${label}</label>
+    <select name="${name}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white transition">
+      ${options.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}
+    </select>
+  </div>`;
+}
+
+function openModal(title,body){
+  document.getElementById('modalContent').innerHTML=`
+    <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+      <h3 class="text-base font-semibold text-brand-900">${title}</h3>
+      <button onclick="closeModal()" class="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center transition">
+        <i class="fas fa-times text-gray-400"></i>
+      </button>
+    </div>
+    <div class="p-6">${body}</div>`;
+  document.getElementById('modalRoot').classList.remove('hidden');
+}
+function closeModal(){document.getElementById('modalRoot').classList.add('hidden')}
+
+// ════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', render);
+
+</script>
+</body>
+</html>
