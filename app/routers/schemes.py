@@ -1,6 +1,6 @@
 import uuid
 import io
-from datetime import datetime
+from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -166,6 +166,62 @@ def _sub_to_dict(sub: SchemeSubmission) -> dict:
         "api_interfaces": sub.api_interfaces.data if sub.api_interfaces else None,
     }
 
+
+_MISSING = object()
+
+
+def _json_safe(value):
+    if value is _MISSING:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _deep_field_diff(old_value, new_value, path: str = "") -> list[dict]:
+    changes: list[dict] = []
+
+    if isinstance(old_value, dict) and isinstance(new_value, dict):
+        for key in sorted(set(old_value.keys()) | set(new_value.keys())):
+            o = old_value.get(key, _MISSING)
+            n = new_value.get(key, _MISSING)
+            field_path = f"{path}.{key}" if path else str(key)
+            changes.extend(_deep_field_diff(o, n, field_path))
+        return changes
+
+    if isinstance(old_value, list) and isinstance(new_value, list):
+        max_len = max(len(old_value), len(new_value))
+        for idx in range(max_len):
+            o = old_value[idx] if idx < len(old_value) else _MISSING
+            n = new_value[idx] if idx < len(new_value) else _MISSING
+            field_path = f"{path}[{idx}]" if path else f"[{idx}]"
+            changes.extend(_deep_field_diff(o, n, field_path))
+        return changes
+
+    if old_value is _MISSING and new_value is _MISSING:
+        return changes
+    if old_value == new_value:
+        return changes
+
+    if old_value is _MISSING:
+        change_type = "added"
+    elif new_value is _MISSING:
+        change_type = "removed"
+    else:
+        change_type = "updated"
+
+    changes.append({
+        "field": path or "value",
+        "old": _json_safe(old_value),
+        "new": _json_safe(new_value),
+        "change_type": change_type,
+    })
+    return changes
+
 # ── CRUD ─────────────────────────────────────────────────────────
 
 @router.get("")
@@ -242,14 +298,17 @@ async def update_scheme(scheme_id: str, body: SchemeUpdate, db: AsyncSession = D
         raise HTTPException(400, "You are not allowed to edit this scheme in its current status")
 
     ov = sub.overview
-    changes = []
+    requested_updates: dict = {}
     for field in ("agency", "scheme_name", "scheme_code", "legislated_or_consent", "consent_scope", "background_info"):
         new_val = getattr(body, field, None)
         if new_val is not None:
-            old_val = getattr(ov, field)
-            if old_val != new_val:
-                changes.append({"field": field, "old": str(old_val), "new": str(new_val)})
-                setattr(ov, field, new_val)
+            requested_updates[field] = new_val
+
+    old_snapshot = {field: getattr(ov, field) for field in requested_updates.keys()}
+    changes = _deep_field_diff(old_snapshot, requested_updates)
+
+    for field, value in requested_updates.items():
+        setattr(ov, field, value)
 
     if changes:
         db.add(ChangeLog(submission_id=sub.id, changed_by=user.id, tab_name="overview", changes=changes))
@@ -273,19 +332,21 @@ async def update_tab(scheme_id: str, tab_name: str, body: TabUpdate, db: AsyncSe
     rel_name = TAB_REL_MAP[tab_name]
     existing = getattr(sub, rel_name)
 
-    old_data = existing.data if existing else None
-    changes = [{"field": tab_name, "old": old_data, "new": body.data}]
+    old_data = (existing.data if existing and existing.data is not None else {})
+    new_data = body.data or {}
+    changes = _deep_field_diff(old_data, new_data)
 
     if existing:
-        existing.data = body.data
+        existing.data = new_data
     else:
-        new_obj = model_cls(submission_id=sub.id, data=body.data)
+        new_obj = model_cls(submission_id=sub.id, data=new_data)
         db.add(new_obj)
 
-    db.add(ChangeLog(submission_id=sub.id, changed_by=user.id, tab_name=tab_name, changes=changes))
+    if changes:
+        db.add(ChangeLog(submission_id=sub.id, changed_by=user.id, tab_name=tab_name, changes=changes))
     sub.updated_at = datetime.utcnow()
     await db.commit()
-    return {"ok": True, "tab": tab_name}
+    return {"ok": True, "tab": tab_name, "changes": len(changes)}
 
 
 # ── Workflow ─────────────────────────────────────────────────────

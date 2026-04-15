@@ -245,6 +245,7 @@ let S={
   currentScheme:null,
   currentSchemeData:null,
   activeTab:0,
+  changeLogScope:'current',
   comments:[],
   changes:[],
   statusFilter:'all',
@@ -716,6 +717,132 @@ function fmtDate(iso){
 
 
 function esc(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):''}
+
+function fmtChangeValue(v){
+  v=coerceStructured(v);
+  if(v===null||v===undefined||v===''||v==='None'||v==='null')return '<span class="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">blank</span>';
+  if(typeof v==='object'){
+    try{return esc(JSON.stringify(v));}catch(_){return esc(String(v));}
+  }
+  return esc(String(v));
+}
+
+function isObj(v){return v&&typeof v==='object'&&!Array.isArray(v)}
+
+function coerceStructured(v){
+  if(v===null||v===undefined)return v;
+  if(typeof v!=='string')return v;
+  const s=v.trim();
+  if(!(s.startsWith('{')||s.startsWith('[')))return v;
+
+  // Already valid JSON
+  try{return JSON.parse(s)}catch(_){/* noop */}
+
+  // Handle historical Python-like repr strings in stored logs
+  try{
+    const normalized=s
+      .replace(/\bNone\b/g,'null')
+      .replace(/\bTrue\b/g,'true')
+      .replace(/\bFalse\b/g,'false')
+      .replace(/'/g,'"');
+    return JSON.parse(normalized);
+  }catch(_){
+    return v;
+  }
+}
+
+function flattenObjectDiff(fieldBase,oldVal,newVal){
+  const rows=[];
+  function walk(path,o,n){
+    if(isObj(o)||isObj(n)){
+      const ok=isObj(o)?Object.keys(o):[];
+      const nk=isObj(n)?Object.keys(n):[];
+      const keys=[...new Set([...ok,...nk])].sort();
+      keys.forEach(k=>walk(path?`${path}.${k}`:k,isObj(o)?o[k]:undefined,isObj(n)?n[k]:undefined));
+      return;
+    }
+    if(Array.isArray(o)||Array.isArray(n)){
+      const oa=Array.isArray(o)?o:[];
+      const na=Array.isArray(n)?n:[];
+      const len=Math.max(oa.length,na.length);
+      for(let i=0;i<len;i++)walk(`${path}[${i}]`,oa[i],na[i]);
+      return;
+    }
+    if((o??'')===(n??''))return;
+    rows.push({field:path||fieldBase||'field',old:o,new:n});
+  }
+  walk(fieldBase||'',oldVal,newVal);
+  return rows;
+}
+
+function normalizeChangeRows(changes){
+  const out=[];
+  (changes||[]).forEach(ch=>{
+    const field=String(ch?.field||'field');
+    const o=coerceStructured(ch?.old);
+    const n=coerceStructured(ch?.new);
+    if(isObj(o)||isObj(n)||Array.isArray(o)||Array.isArray(n)){
+      const expanded=flattenObjectDiff(field,o,n);
+      if(expanded.length)out.push(...expanded);
+      else out.push({field,old:o,new:n});
+    }else{
+      out.push({field,old:o,new:n});
+    }
+  });
+  return out;
+}
+
+function currentScreenKey(){
+  return TABS[S.activeTab]||'overview';
+}
+
+const FIELD_LABELS={
+  agency:'Agency',
+  scheme_name:'Scheme Name',
+  scheme_code:'Scheme Code',
+  legislated_or_consent:'Legislated or Consent',
+  consent_scope:'Consent Scope',
+  background_info:'Background Info',
+  org_established:'Organisation Established Fund/Scheme',
+  purpose:'Purpose of Fund/Scheme',
+  funding_source:'Source of Funding',
+  governing_body:'Governing Body',
+  eligibility_org:'Organisation Setting Eligibility Criteria',
+  eval_orgs:'Organisation(s) Evaluating Applications',
+  third_parties:'Third Parties Receiving Data',
+  group_name:'Group Schemes Name',
+  logo_info:'Scheme Logo Info',
+  portal_corppass:'HOMES Portal (Internet-CorpPass)',
+  num_orgs_corppass:'No. of Organisations via CorpPass',
+  portal_intranet:'HOMES Portal (Intranet)',
+  num_orgs_intranet:'No. of Organisations via Intranet',
+  batch_sftp:'Batch SFTP',
+  realtime_apex:'Real-time APEX API'
+};
+
+function humanizeFieldToken(token){
+  const t=String(token||'').trim();
+  if(!t)return 'Field';
+  if(FIELD_LABELS[t])return FIELD_LABELS[t];
+  return t
+    .replace(/_/g,' ')
+    .replace(/\s+/g,' ')
+    .replace(/\b\w/g,ch=>ch.toUpperCase());
+}
+
+function displayFieldName(field,tab){
+  const f=String(field||'');
+  const t=String(tab||'');
+  let raw=f||'field';
+  if(t&&raw.startsWith(t+'.'))raw=raw.slice(t.length+1);
+  if(t&&raw.startsWith(t+'['))raw=raw.slice(t.length);
+
+  const path=raw.replace(/\[(\d+)\]/g,'.$1').split('.').filter(Boolean);
+  if(!path.length)return 'Field';
+
+  const labels=path.map(p=>/^[0-9]+$/.test(p)?`Item ${parseInt(p,10)+1}`:humanizeFieldToken(p));
+  return labels.join(' › ');
+}
 
 // ── CREATE NEW SCHEME ──
 async function createNewScheme(){
@@ -1258,9 +1385,9 @@ function tabHasData(i){
   return d[tn]&&typeof d[tn]==='object'&&Object.keys(d[tn]).length>0;
 }
 
-function switchTab(i){S.activeTab=i;
-  document.querySelectorAll('.tab-btn').forEach((b,j)=>{b.classList.toggle('active',j===i)});
-  renderTabContent();
+function switchTab(i){
+  S.activeTab=i;
+  renderDetailContent();
 }
 
 function isReadOnly(){
@@ -1965,6 +2092,9 @@ function renderSlotPanel(d,canEdit){
 
 function renderApprovalPanel(d,canEdit){
   const status=d.status;
+  const screenKey=currentScreenKey();
+  const screenChanges=(S.changes||[]).filter(c=>String(c.tab_name||'')===screenKey);
+  const shownChanges=S.changeLogScope==='all'?(S.changes||[]):screenChanges;
 
   let actions='';
   if(hasRole('agency_creator')&&(status==='draft'||status==='rejected')){
@@ -2034,19 +2164,47 @@ function renderApprovalPanel(d,canEdit){
     <!-- Changes Log -->
     <div class="bg-white rounded-xl border border-gray-100 shadow-sm">
       <div class="px-5 py-3 border-b border-gray-100">
+        <div class="flex items-center justify-between gap-2">
         <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
           <i class="fas fa-history mr-1"></i>Change Log
         </h4>
+        <div class="flex items-center gap-1">
+          <button onclick="S.changeLogScope='current';renderDetailContent()" class="text-[10px] px-2 py-1 rounded-md border ${S.changeLogScope==='current'?'bg-brand-600 border-brand-600 text-white':'bg-white border-slate-200 text-slate-600'}">Current Screen</button>
+          <button onclick="S.changeLogScope='all';renderDetailContent()" class="text-[10px] px-2 py-1 rounded-md border ${S.changeLogScope==='all'?'bg-brand-600 border-brand-600 text-white':'bg-white border-slate-200 text-slate-600'}">All Screens</button>
+        </div>
+        </div>
+        <p class="text-[10px] text-slate-400 mt-1">Showing: ${S.changeLogScope==='all'?'All screens':TAB_LABELS[S.activeTab]}</p>
       </div>
       <div class="max-h-48 overflow-y-auto">
-        ${S.changes.length===0?'<div class="px-5 py-4 text-xs text-gray-400 text-center">No changes recorded</div>':
-        S.changes.map(c=>`
-        <div class="px-5 py-2 border-b border-gray-50">
+        ${shownChanges.length===0?'<div class="px-5 py-4 text-xs text-gray-400 text-center">No changes recorded for this screen</div>':
+        shownChanges.map(c=>`
+        <div class="px-5 py-3 border-b border-gray-50">
           <div class="flex items-center justify-between">
-            <span class="text-xs font-medium text-gray-700">${esc(c.tab_name||'')}</span>
+            <span class="text-xs font-semibold text-gray-700">Page: ${esc(c.tab_name||'')}</span>
             <span class="text-[10px] text-gray-400">${c.timestamp?new Date(c.timestamp).toLocaleString():''}</span>
           </div>
           <p class="text-[10px] text-gray-500">by ${esc(c.changed_by||'')} ${c.changed_by_username?`(${esc(c.changed_by_username)})`:''}</p>
+          ${(Array.isArray(c.changes)&&c.changes.length)?`
+          <div class="mt-2 overflow-x-auto">
+            <table class="w-full text-[10px] border border-slate-200 rounded-lg overflow-hidden">
+              <thead>
+                <tr class="bg-slate-50 text-slate-600 uppercase tracking-wider">
+                  <th class="px-2 py-1 text-left">Field</th>
+                  <th class="px-2 py-1 text-left">Previous</th>
+                  <th class="px-2 py-1 text-left">Changed To</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${normalizeChangeRows(c.changes).map(ch=>`
+                  <tr class="border-t border-slate-100">
+                    <td class="px-2 py-1 text-slate-700 font-semibold">${esc(displayFieldName(ch.field,c.tab_name))}</td>
+                    <td class="px-2 py-1 text-slate-600 break-all">${fmtChangeValue(ch.old)}</td>
+                    <td class="px-2 py-1 text-slate-700 break-all">${fmtChangeValue(ch.new)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>`:''}
         </div>`).join('')}
       </div>
     </div>
