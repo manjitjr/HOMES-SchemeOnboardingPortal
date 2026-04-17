@@ -1,12 +1,20 @@
 import uuid
 import enum
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 from sqlalchemy import String, Integer, Text, DateTime, Date, ForeignKey, JSON, Enum, Boolean, UniqueConstraint, event, inspect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
     pass
+
+
+SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
+
+
+def sg_now() -> datetime:
+    return datetime.now(SINGAPORE_TZ).replace(tzinfo=None)
 
 
 AGENCIES: list[dict[str, str]] = [
@@ -73,7 +81,7 @@ class SchemeMaster(Base):
     scheme_name: Mapped[str] = mapped_column(String(255))
     scheme_code: Mapped[str | None] = mapped_column(String(100))
     created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=sg_now)
 
     versions: Mapped[list["SchemeSubmission"]] = relationship(back_populates="master")
 
@@ -87,6 +95,8 @@ class User(Base):
     agency: Mapped[str] = mapped_column(String(100))
     display_name: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_logout_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     # Convenience helpers
     def has_role(self, *role_names):
@@ -119,8 +129,8 @@ class SchemeSubmission(Base):
     valid_to: Mapped[date | None] = mapped_column(Date)
     cloned_from_submission_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("scheme_submissions.id"))
     created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=sg_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=sg_now, onupdate=sg_now)
 
     master: Mapped["SchemeMaster | None"] = relationship(back_populates="versions")
     overview: Mapped["SchemeOverview | None"] = relationship(foreign_keys=[scheme_overview_id])
@@ -182,7 +192,7 @@ class ChangeLog(Base):
     changed_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
     tab_name: Mapped[str | None] = mapped_column(String(100))
     changes: Mapped[list | None] = mapped_column(JSON)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=sg_now)
 
     submission: Mapped["SchemeSubmission"] = relationship(back_populates="change_logs")
     user: Mapped["User | None"] = relationship(foreign_keys=[changed_by])
@@ -195,7 +205,7 @@ class Comment(Base):
     user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
     text: Mapped[str] = mapped_column(Text)
     stage: Mapped[str | None] = mapped_column(String(50))  # submitted/approved/rejected
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=sg_now)
 
     submission: Mapped["SchemeSubmission"] = relationship(back_populates="comments")
     user: Mapped["User | None"] = relationship(foreign_keys=[user_id])
@@ -218,13 +228,42 @@ class OnboardingSlot(Base):
     technical_go_live: Mapped[date] = mapped_column(Date)
     business_go_live: Mapped[date] = mapped_column(Date)
     booked_by_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
-    booked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    booked_at: Mapped[datetime] = mapped_column(DateTime, default=sg_now)
     approval_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, approved, rejected
     approver_comment: Mapped[str | None] = mapped_column(Text)  # For rejection reasons, e.g. "Please pick Jul instead"
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=sg_now, onupdate=sg_now)
 
     submission: Mapped["SchemeSubmission"] = relationship(back_populates="onboarding_slots")
     booked_by: Mapped["User | None"] = relationship(foreign_keys=[booked_by_id])
+
+
+class FieldGuidance(Base):
+    """Field-level guidance for UI forms.
+    
+    Stores three levels of guidance:
+    1. Inline hint - gray helper text always visible below field
+    2. Rich popover - title, description, examples, do's, don'ts (shown on click)
+    3. Walkthrough - used in guided tour (reuses popover content)
+    """
+    __tablename__ = "field_guidance"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tab_name: Mapped[str] = mapped_column(String(100), index=True)  # 'overview', 'mt_parameters', etc.
+    field_name: Mapped[str] = mapped_column(String(255), index=True)  # 'agency', 'scheme_name', etc.
+    
+    # Inline hint: simple text always visible
+    inline_hint: Mapped[str | None] = mapped_column(Text)
+    
+    # Rich popover: shown on click or during walkthrough
+    popover_title: Mapped[str | None] = mapped_column(String(255))
+    popover_description: Mapped[str | None] = mapped_column(Text)
+    popover_examples: Mapped[list | None] = mapped_column(JSON, default=list)  # ["Example 1", "Example 2"]
+    popover_do: Mapped[list | None] = mapped_column(JSON, default=list)  # ["Do this", "Also do that"]
+    popover_dont: Mapped[list | None] = mapped_column(JSON, default=list)  # ["Don't do this", "Never do that"]
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=sg_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=sg_now, onupdate=sg_now)
+    
+    __table_args__ = (UniqueConstraint('tab_name', 'field_name', name='uc_tab_field'),)
 
 
 @event.listens_for(User, "before_update")

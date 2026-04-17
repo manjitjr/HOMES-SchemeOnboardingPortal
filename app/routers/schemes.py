@@ -14,7 +14,7 @@ from app.auth import get_current_user
 from app.models import (
     User, SchemeOverview, SchemeSubmission, SchemeMTParameters,
     TransactionDetails, HOMESFunctions, MTBands, APIBatchInterfaces,
-    ChangeLog, Comment, SubmissionStatus, OnboardingSlot, SchemeMaster,
+    ChangeLog, Comment, SubmissionStatus, OnboardingSlot, SchemeMaster, sg_now,
 )
 
 router = APIRouter(prefix="/api/schemes", tags=["schemes"])
@@ -106,6 +106,14 @@ def _can_edit_submission(user: User, sub: SchemeSubmission) -> bool:
     if user.has_role("agency_creator") and status_val in (SubmissionStatus.draft.value, SubmissionStatus.rejected.value):
         return True
     if user.has_role("agency_approver") and status_val in (SubmissionStatus.pending_review.value, SubmissionStatus.rejected.value):
+        return True
+    return False
+
+
+def _can_edit_primary_slot(user: User, sub: SchemeSubmission, primary_slot: OnboardingSlot | None) -> bool:
+    if _can_edit_submission(user, sub):
+        return True
+    if user.has_role("agency_creator") and primary_slot and primary_slot.approval_status == "rejected":
         return True
     return False
 
@@ -476,7 +484,7 @@ async def update_scheme(scheme_id: str, body: SchemeUpdate, db: AsyncSession = D
     if changes:
         db.add(ChangeLog(submission_id=sub.id, changed_by=user.id, tab_name="overview", changes=changes))
 
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     await db.commit()
     return {"ok": True, "changes": len(changes)}
 
@@ -507,7 +515,7 @@ async def update_tab(scheme_id: str, tab_name: str, body: TabUpdate, db: AsyncSe
 
     if changes:
         db.add(ChangeLog(submission_id=sub.id, changed_by=user.id, tab_name=tab_name, changes=changes))
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     await db.commit()
     return {"ok": True, "tab": tab_name, "changes": len(changes)}
 
@@ -613,7 +621,7 @@ async def activate_version(scheme_id: str, db: AsyncSession = Depends(get_db), u
             v.status = SubmissionStatus.expired.value
 
     sub.status = SubmissionStatus.active.value
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     db.add(Comment(submission_id=sub.id, user_id=user.id, text="Version activated", stage="active"))
     await db.commit()
     return {"ok": True, "status": sub.status}
@@ -629,7 +637,7 @@ async def retire_version(scheme_id: str, body: RetireBody = RetireBody(), db: As
     retire_date = _parse_iso_date(body.retire_date, "retire_date") if body.retire_date else date.today()
     sub.valid_to = retire_date
     sub.status = SubmissionStatus.retired.value
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     db.add(Comment(submission_id=sub.id, user_id=user.id, text=(body.comment or "Version retired by MTO"), stage="retired"))
     await db.commit()
     return {"ok": True, "status": sub.status, "valid_to": sub.valid_to.isoformat() if sub.valid_to else None}
@@ -645,7 +653,7 @@ async def submit_scheme(scheme_id: str, db: AsyncSession = Depends(get_db), user
     if sub.status not in (SubmissionStatus.draft.value, SubmissionStatus.rejected.value):
         raise HTTPException(400, f"Cannot submit from status {sub.status}")
     sub.status = SubmissionStatus.pending_review.value
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     db.add(Comment(submission_id=sub.id, user_id=user.id, text="Submitted for agency review", stage="submitted"))
     await db.commit()
     return {"ok": True, "status": sub.status}
@@ -659,7 +667,7 @@ async def approve_scheme(scheme_id: str, db: AsyncSession = Depends(get_db), use
     if sub.status not in (SubmissionStatus.pending_review.value, SubmissionStatus.rejected.value):
         raise HTTPException(400, f"Cannot approve/send from status {sub.status}")
     sub.status = SubmissionStatus.pending_final.value
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     db.add(Comment(submission_id=sub.id, user_id=user.id, text="Approved by agency approver and sent to MTO", stage="approved"))
     await db.commit()
     return {"ok": True, "status": sub.status}
@@ -672,7 +680,7 @@ async def final_approve_scheme(scheme_id: str, db: AsyncSession = Depends(get_db
     if sub.status != SubmissionStatus.pending_final.value:
         raise HTTPException(400, f"Cannot final-approve from status {sub.status}")
     sub.status = SubmissionStatus.approved.value
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     db.add(Comment(submission_id=sub.id, user_id=user.id, text="Final approval granted", stage="approved"))
     await db.commit()
     return {"ok": True, "status": sub.status}
@@ -693,7 +701,7 @@ async def reject_scheme(scheme_id: str, body: RejectBody = RejectBody(), db: Asy
         raise HTTPException(status_code=403, detail="Only agency approver or MTO admin can reject")
 
     sub.status = SubmissionStatus.rejected.value
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     comment_text = body.comment or "Rejected"
     db.add(Comment(submission_id=sub.id, user_id=user.id, text=comment_text, stage="rejected"))
     await db.commit()
@@ -855,9 +863,12 @@ async def approve_slot(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    """Approve or reject the onboarding slot for a scheme submission.
-    
-    Approvers can approve, or reject with a comment (e.g., "Please pick July instead").
+    """Review/approve/reject the onboarding slot for a scheme submission.
+
+    Rules:
+    - Agency approver can review and reject with feedback at pending_review stage
+      (cannot grant final slot approval)
+    - MTO admin can approve/reject at pending_final stage
     """
     _require_role(user, "agency_approver", "mto_admin")
     
@@ -876,10 +887,16 @@ async def approve_slot(
     
     if body.approval_status not in ["approved", "rejected"]:
         raise HTTPException(status_code=400, detail="Status must be 'approved' or 'rejected'")
+
+    # Final slot approval is MTO-only
+    if user.has_role("agency_approver") and body.approval_status == "approved":
+        raise HTTPException(status_code=403, detail="Only MTO Admin can approve onboarding slots")
+    if user.has_role("agency_approver") and body.approval_status == "rejected" and not (body.approver_comment or "").strip():
+        raise HTTPException(status_code=400, detail="Please provide review comments when rejecting a slot")
     
     primary_slot.approval_status = body.approval_status
     primary_slot.approver_comment = body.approver_comment
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     
     await db.commit()
     return {"message": f"Slot {body.approval_status}"}
@@ -915,34 +932,50 @@ async def set_scheme_slot(
     sub = await _get_submission(db, scheme_id)
     _assert_agency_access(user, sub)
     
-    # Check submission is in editable state
-    if not _can_edit_submission(user, sub):
+    # Find or create primary slot
+    primary_slot = next((s for s in (sub.onboarding_slots or []) if not s.is_additional), None)
+
+    # Check slot is in editable state
+    if not _can_edit_primary_slot(user, sub, primary_slot):
         raise HTTPException(status_code=400, detail="Cannot edit slot in current workflow stage")
-    
+
     # Check slot month is valid (only Jan, Apr, Jul, Nov)
     if body.slot_month not in [1, 4, 7, 11]:
         raise HTTPException(status_code=400, detail="Invalid slot month. Must be January(1), April(4), July(7), or November(11)")
-    
+
     # Parse dates
     try:
         tech_date = date.fromisoformat(body.technical_go_live)
         biz_date = date.fromisoformat(body.business_go_live)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-    
+
     # Prevent backdating: cannot select a slot in a past quarter
     today = date.today()
     slot_quarter_start = date(body.year, body.slot_month, 1)
     if slot_quarter_start < today.replace(day=1):
         raise HTTPException(status_code=400, detail=f"Cannot select a slot in the past (slot month: {_get_month_name(body.slot_month)} {body.year})")
-    
+
     # Go-live dates cannot be before the selected slot month
     slot_month_date = date(body.year, body.slot_month, 1)
     if tech_date < slot_month_date or biz_date < slot_month_date:
         raise HTTPException(status_code=400, detail=f"Go-live dates cannot be before {_get_month_name(body.slot_month)} {body.year}")
-    
-    # Find or create primary slot
-    primary_slot = next((s for s in (sub.onboarding_slots or []) if not s.is_additional), None)
+
+    # Capacity check: max 4 bookings per quarter month (pending/approved) across all schemes
+    cap_q = select(OnboardingSlot).where(
+        OnboardingSlot.year == body.year,
+        OnboardingSlot.slot_month == body.slot_month,
+        OnboardingSlot.is_additional == False,
+        OnboardingSlot.approval_status.in_(["pending", "approved"]),
+    )
+    existing_for_quarter = (await db.execute(cap_q)).scalars().all()
+    if primary_slot:
+        existing_for_quarter = [s for s in existing_for_quarter if s.id != primary_slot.id]
+    if len(existing_for_quarter) >= 4:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{_get_month_name(body.slot_month)} {body.year} is full (4/4 slots). Please select another quarter.",
+        )
     
     if primary_slot:
         # Update existing primary slot
@@ -968,7 +1001,7 @@ async def set_scheme_slot(
         )
         db.add(primary_slot)
     
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     await db.commit()
     return {"message": "Slot updated successfully"}
 
@@ -1030,7 +1063,7 @@ async def delete_additional_slot(
         raise HTTPException(status_code=400, detail="Cannot delete primary slot. Use PUT to update it.")
     
     await db.delete(slot)
-    sub.updated_at = datetime.utcnow()
+    sub.updated_at = sg_now()
     await db.commit()
     
     return {"message": "Slot deleted successfully"}

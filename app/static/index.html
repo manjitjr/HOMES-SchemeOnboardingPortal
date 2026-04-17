@@ -209,6 +209,15 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#3b82f6;box-sh
 .users-table-wrap thead th{position:sticky;top:0;z-index:1;background:linear-gradient(90deg,#eff6ff 0%,#eef2ff 55%,#fff 100%)}
 .filter-chip{border:1px solid #dbe4f5;background:#fff;border-radius:999px;padding:.28rem .7rem;font-size:11px;font-weight:600;color:#475569}
 
+.gov-banner{height:36px;background:#ffffff;border-bottom:1px solid #e5e7eb;color:#1f2937}
+.gov-banner .inner{max-width:1400px;margin:0 auto;height:100%;display:flex;align-items:center;justify-content:space-between;padding:0 14px}
+.gov-left{display:flex;align-items:center;gap:.45rem;min-width:0}
+.gov-crest{width:18px;height:18px;border-radius:50%;background:#dc2626;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px}
+.gov-badge{font-size:11px;font-weight:700;letter-spacing:.01em;white-space:nowrap}
+.gov-identify{font-size:11px;color:#2563eb;font-weight:600;display:inline-flex;align-items:center;gap:.2rem;text-decoration:none}
+.gov-identify:hover{text-decoration:underline}
+.gov-sub{font-size:11px;color:#64748b}
+
 #schedulingRoot .schedule-toolbar{border-radius:18px}
 #schedulingRoot .schedule-grid > div{height:100%}
 #schedulingRoot .schedule-col{display:flex;flex-direction:column;min-height:420px}
@@ -240,7 +249,8 @@ function parseStoredUser(){
 let S={
   token:localStorage.getItem('homes_token')||null,
   user:parseStoredUser(),
-  view:'list', // list, detail, users
+  sessionStartedAt:localStorage.getItem('homes_session_started_at')||null,
+  view:'list', // list, detail, users, field_management
   schemes:[],
   currentScheme:null,
   currentSchemeData:null,
@@ -258,7 +268,12 @@ let S={
   userStatusFilter:'all',
   slots:[],
   slotNotifications:[],
-  selectedSlotYear:null
+  selectedSlotYear:null,
+  showHints:localStorage.getItem('homes_showHints')!=='false',
+  guidance:{},  // Cached guidance by tab.field
+  guidanceList:[],
+  fieldMgmtTab:'overview',
+  slotOverviewByYear:{}
 };
 
 // Role helpers
@@ -318,8 +333,10 @@ async function doLogin(e){
   try{
     const r=await api('/api/auth/login',{method:'POST',body:{username:u,password:p}});
     S.token=r.token;S.user=r.user;
+    S.sessionStartedAt=new Date().toISOString();
     localStorage.setItem('homes_token',r.token);
     localStorage.setItem('homes_user',JSON.stringify(r.user));
+    localStorage.setItem('homes_session_started_at',S.sessionStartedAt);
     toast('Welcome, '+S.user.display_name);
     render();
   }catch(err){toast(err.message,'error')}
@@ -329,17 +346,86 @@ async function demoAdminLogin(){
   try{
     const r=await api('/api/auth/login',{method:'POST',body:{username:'mto_admin',password:'password'}});
     S.token=r.token;S.user=r.user;
+    S.sessionStartedAt=new Date().toISOString();
     localStorage.setItem('homes_token',r.token);
     localStorage.setItem('homes_user',JSON.stringify(r.user));
+    localStorage.setItem('homes_session_started_at',S.sessionStartedAt);
     toast('Welcome, '+S.user.display_name);
     render();
   }catch(err){toast(err.message,'error')}
 }
 
-function logout(){
-  S.token=null;S.user=null;S.view='list';S.schemes=[];S.currentScheme=null;
+async function demoCreatorLogin(){
+  try{
+    const r=await api('/api/auth/login',{method:'POST',body:{username:'moh_creator',password:'password'}});
+    S.token=r.token;S.user=r.user;
+    S.sessionStartedAt=new Date().toISOString();
+    localStorage.setItem('homes_token',r.token);
+    localStorage.setItem('homes_user',JSON.stringify(r.user));
+    localStorage.setItem('homes_session_started_at',S.sessionStartedAt);
+    toast('Welcome, '+S.user.display_name);
+    render();
+  }catch(err){toast(err.message,'error')}
+}
+
+async function demoApproverLogin(){
+  try{
+    const r=await api('/api/auth/login',{method:'POST',body:{username:'moh_approver',password:'password'}});
+    S.token=r.token;S.user=r.user;
+    S.sessionStartedAt=new Date().toISOString();
+    localStorage.setItem('homes_token',r.token);
+    localStorage.setItem('homes_user',JSON.stringify(r.user));
+    localStorage.setItem('homes_session_started_at',S.sessionStartedAt);
+    toast('Welcome, '+S.user.display_name);
+    render();
+  }catch(err){toast(err.message,'error')}
+}
+
+function formatSessionDuration(startIso){
+  if(!startIso)return '-';
+  const start=parseAppDateTime(startIso);
+  if(!start || Number.isNaN(start.getTime()))return '0m';
+  const ms=Math.max(0,Date.now()-start.getTime());
+  const totalSec=Math.floor(ms/1000);
+  const h=Math.floor(totalSec/3600);
+  const m=Math.floor((totalSec%3600)/60);
+  const s=totalSec%60;
+  const hh=String(h).padStart(2,'0');
+  const mm=String(m).padStart(2,'0');
+  const ss=String(s).padStart(2,'0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+async function logout(){
+  const spent=formatSessionDuration(S.sessionStartedAt);
+  const startedAt=S.sessionStartedAt?fmtDateTime(S.sessionStartedAt):'-';
+  const endedAt=fmtDateTime(new Date().toISOString());
+  openModal('Confirm Logout',`
+    <div class="space-y-4">
+      <p class="text-sm text-gray-600">You are about to log out.</p>
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 space-y-1">
+        <div><span class="font-semibold">Session started:</span> ${startedAt}</div>
+        <div><span class="font-semibold">Current time:</span> ${endedAt}</div>
+        <div><span class="font-semibold">Time spent on site:</span> ${spent}</div>
+      </div>
+      <div class="flex items-center justify-end gap-2 pt-1">
+        <button onclick="closeModal()" class="px-3 py-2 rounded-lg text-xs bg-gray-100 hover:bg-gray-200 font-medium">Cancel</button>
+        <button onclick="confirmLogout()" class="px-3 py-2 rounded-lg text-xs bg-red-600 hover:bg-red-700 text-white font-medium">Log out</button>
+      </div>
+    </div>`);
+}
+
+async function confirmLogout(){
+  const spent=formatSessionDuration(S.sessionStartedAt);
+  try{
+    if(S.token)await api('/api/auth/logout',{method:'POST'});
+  }catch(_){/* best-effort logout capture */}
+  S.token=null;S.user=null;S.view='list';S.schemes=[];S.currentScheme=null;S.sessionStartedAt=null;
   localStorage.removeItem('homes_token');localStorage.removeItem('homes_user');
+  localStorage.removeItem('homes_session_started_at');
+  closeModal();
   render();
+  toast(`Logged out. Time spent: ${spent}`,'info');
 }
 
 // ════════════════════════════════════════
@@ -353,6 +439,7 @@ async function render(){
     else if(S.view==='detail'){app.innerHTML=renderDetailPage()}
     else if(S.view==='scheduling'){app.innerHTML=renderSchedulingPage()}
     else if(S.view==='users'){await ensureAgenciesLoaded();app.innerHTML=renderUsersPage();loadUsers()}
+    else if(S.view==='field_management'){app.innerHTML=renderFieldManagementPage()}
   }catch(e){
     console.error('Render error:', e);
     document.getElementById('app').innerHTML=`<div style="padding:20px;color:red;font-family:monospace"><strong>Error:</strong> ${e.message}</div>`;
@@ -486,11 +573,32 @@ function renderLogin(){
   </div>`;
 }
 
+function renderGovBanner(){
+  return `
+  <div class="gov-banner">
+    <div class="inner">
+      <div class="gov-left">
+        <span class="gov-crest"><i class="fas fa-landmark"></i></span>
+        <span class="gov-badge">A Singapore Government Agency Website</span>
+        <a class="gov-identify" href="https://www.gov.sg/trusted-sites" target="_blank" rel="noopener noreferrer">
+          How to identify <i class="fas fa-chevron-right text-[9px]"></i>
+        </a>
+      </div>
+      <div class="gov-sub hidden sm:flex items-center gap-2">
+        <i class="fas fa-lock text-[10px]"></i>
+        <span>Secure site (HTTPS)</span>
+      </div>
+    </div>
+  </div>`;
+}
+
 // ── HEADER ──
 function renderHeader(){
   const roleLabels={agency_creator:'Agency Creator',agency_approver:'Agency Approver',mto_admin:'MTO Admin'};
   const roleTags=(S.user.roles||[]).map(r=>`<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold glass-chip text-white">${roleLabels[r]||r}</span>`).join(' ');
+  const lastLogin=S.user?.last_login_at?fmtDateTime(S.user.last_login_at):'-';
   return `
+  ${renderGovBanner()}
   <header class="gradient-shell px-6 py-3 flex items-center justify-between sticky top-0 z-20 border-b border-white/10 shadow-xl">
     <div class="flex items-center gap-4">
       <div class="flex items-center gap-3 cursor-pointer" onclick="S.view='list';render()">
@@ -512,17 +620,28 @@ function renderHeader(){
         ${isAdmin()?`
         <button onclick="S.view='users';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='users'?'bg-white text-brand-800':'text-white/80 hover:bg-white/15'}">
           <i class="fas fa-users-cog mr-1"></i>User Management
+        </button>
+        <button onclick="S.view='field_management';render();loadFieldGuidance()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='field_management'?'bg-white text-brand-800':'text-white/80 hover:bg-white/15'}">
+          <i class="fas fa-book mr-1"></i>Field Guidance
         </button>`:''}
       </nav>
     </div>
     <div class="flex items-center gap-3">
       <div class="hidden md:flex items-center gap-1">${roleTags}</div>
       ${S.user.agency?`<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold glass-chip text-white">${esc(S.user.agency)}</span>`:''}
+      <div class="flex items-center gap-2 pl-3 border-l border-white/20">
+        <button onclick="toggleGlobalHints()" title="${S.showHints?'Hide':'Show'} field hints" class="text-white/70 hover:text-white transition text-sm">
+          <i class="fas ${S.showHints?'fa-eye':'fa-eye-slash'}"></i>
+        </button>
+      </div>
       <div class="flex items-center gap-2">
         <div class="w-7 h-7 rounded-full bg-white/20 border border-white/20 flex items-center justify-center">
           <i class="fas fa-user text-white text-[10px]"></i>
         </div>
-        <span class="text-sm font-medium text-white">${S.user.display_name||S.user.username}</span>
+        <div class="leading-tight">
+          <div class="text-sm font-medium text-white">${S.user.display_name||S.user.username}</div>
+          <div class="text-[10px] text-white/70 hidden lg:block">Last login: ${lastLogin}</div>
+        </div>
       </div>
       <button onclick="logout()" class="text-white/70 hover:text-white transition" title="Logout">
         <i class="fas fa-sign-out-alt"></i>
@@ -637,7 +756,7 @@ function renderSchemeTable(){
         <td class="px-5 py-3 text-gray-500">${esc(s.agency||'-')}</td>
         <td class="px-5 py-3">${statusBadge(s.status)}</td>
         <td class="px-5 py-3 text-gray-500">${s.version||1}</td>
-        <td class="px-5 py-3 text-gray-400 text-xs">${s.updated_at?new Date(s.updated_at).toLocaleDateString():'-'}</td>
+        <td class="px-5 py-3 text-gray-400 text-xs">${s.updated_at?parseAppDateTime(s.updated_at).toLocaleDateString('en-SG', {timeZone:'Asia/Singapore'}):'-'}</td>
         ${showDelete?`<td class="px-5 py-3 text-right">
           <button onclick="event.stopPropagation();deleteScheme('${s.id}')" class="text-red-500 hover:text-red-700 text-xs font-semibold" title="Delete scheme">
             <i class="fas fa-trash mr-1"></i>Delete
@@ -702,10 +821,17 @@ async function loadSchedulingData(){
   }
 }
 
+function parseAppDateTime(iso){
+  if(!iso)return null;
+  const normalized=/([zZ]|[+-]\d{2}:\d{2})$/.test(iso)?iso:`${iso}+08:00`;
+  return new Date(normalized);
+}
+
 function fmtDateTime(iso){
   if(!iso)return '-';
-  const d=new Date(iso);
-  return d.toLocaleString([], {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  const d=parseAppDateTime(iso);
+  if(!d || Number.isNaN(d.getTime()))return '-';
+  return d.toLocaleString('en-SG', {timeZone:'Asia/Singapore',year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 }
 
 function fmtDate(iso){
@@ -894,6 +1020,127 @@ async function submitNewScheme(e){
 }
 
 // ════════════════════════════════════════
+// FIELD GUIDANCE MANAGEMENT PAGE
+// ════════════════════════════════════════
+async function loadFieldGuidance(){
+  try{
+    S.guidanceList=await api('/api/guidance');
+    S.guidance={};
+    S.guidanceList.forEach(g=>{S.guidance[`${g.tab_name}.${g.field_name}`]=g});
+    renderFieldGuidanceContent();
+  }catch(e){toast(e.message,'error')}
+}
+
+function renderFieldManagementPage(){
+  const tabs=TABS;
+  const tabLabels=TAB_LABELS;
+  return renderHeader()+`
+  <div class="p-6 max-w-6xl mx-auto fade-in">
+    <div class="rounded-2xl mb-6 p-6 text-white relative overflow-hidden" style="background:linear-gradient(135deg,#0f2440 0%,#1e3a5f 55%,#2563eb 100%)">
+      <div class="absolute -top-10 -right-8 w-40 h-40 rounded-full bg-white/10 blur-2xl"></div>
+      <div class="relative">
+        <h1 class="text-3xl font-bold mb-1"><i class="fas fa-book mr-3"></i>Field Guidance Management</h1>
+        <p class="text-white/70 text-sm">Edit inline hints, popover descriptions, examples, do's and don'ts for each field</p>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-4 gap-3 mb-6">
+      ${tabs.map((t,i)=>`
+        <button onclick="S.fieldMgmtTab='${t}';renderFieldGuidanceContent()" class="px-3 py-3 rounded-lg text-xs font-medium transition ${S.fieldMgmtTab===t?'bg-brand-600 text-white':'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'}">
+          <i class="fas ${TAB_ICONS[i]} mr-2"></i>${tabLabels[i].split(' ')[0]}
+        </button>
+      `).join('')}
+    </div>
+
+    <div id="guidanceContent" class="rounded-xl modern-surface p-6"></div>
+  </div>`;
+}
+
+function renderFieldGuidanceContent(){
+  const tab=S.fieldMgmtTab;
+  const fields=S.guidanceList.filter(g=>g.tab_name===tab);
+  const el=document.getElementById('guidanceContent');
+  if(!el)return;
+  
+  if(!fields.length){
+    el.innerHTML='<div class="text-center py-8 text-gray-400">No fields found for this tab</div>';
+    return;
+  }
+  
+  el.innerHTML=`<div class="space-y-4">${fields.map(g=>`
+    <div class="border border-gray-200 rounded-xl p-5 hover:shadow-md transition">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <h3 class="font-bold text-gray-800">${humanizeFieldToken(g.field_name)}</h3>
+          <p class="text-xs text-gray-500 mt-1">Field: <code>${g.field_name}</code></p>
+        </div>
+        <button onclick="saveFieldGuidance('${tab}','${g.field_name}')" class="px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-xs font-medium transition">
+          Save
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-gray-700 mb-2">📌 Inline Hint</label>
+          <textarea id="hint_${tab}_${g.field_name}" placeholder="Short gray text below field (always visible)" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm resize-none" rows="2">${g.inline_hint||''}</textarea>
+          <p class="text-[10px] text-gray-500 mt-1">Single line of context displayed below the field</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-2">📋 Popover Title</label>
+            <input id="title_${tab}_${g.field_name}" type="text" placeholder="Title for the help card" value="${g.popover_title||''}" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm"/>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-2">📝 Description</label>
+            <textarea id="desc_${tab}_${g.field_name}" placeholder="Main explanation" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm resize-none" rows="2">${g.popover_description||''}</textarea>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-2">✅ Do's (one per line)</label>
+            <textarea id="do_${tab}_${g.field_name}" placeholder="What to do&#10;Add one per line" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm resize-none font-mono" rows="3">${(g.popover_do||[]).join('\n')}</textarea>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-2">❌ Don'ts (one per line)</label>
+            <textarea id="dont_${tab}_${g.field_name}" placeholder="What NOT to do&#10;Add one per line" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm resize-none font-mono" rows="3">${(g.popover_dont||[]).join('\n')}</textarea>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-gray-700 mb-2">💡 Examples (one per line)</label>
+          <textarea id="ex_${tab}_${g.field_name}" placeholder="Example 1&#10;Example 2&#10;Example 3" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm resize-none font-mono" rows="3">${(g.popover_examples||[]).join('\n')}</textarea>
+        </div>
+      </div>
+    </div>
+  `).join('')}</div>`;
+}
+
+async function saveFieldGuidance(tab,field){
+  const getVal=(id)=>document.getElementById(id)?.value||'';
+  const getLines=(id)=>getVal(id).split('\n').map(l=>l.trim()).filter(Boolean);
+  
+  const body={
+    inline_hint:getVal(`hint_${tab}_${field}`),
+    popover_title:getVal(`title_${tab}_${field}`),
+    popover_description:getVal(`desc_${tab}_${field}`),
+    popover_do:getLines(`do_${tab}_${field}`),
+    popover_dont:getLines(`dont_${tab}_${field}`),
+    popover_examples:getLines(`ex_${tab}_${field}`)
+  };
+  
+  try{
+    await api(`/api/guidance/${tab}/${field}`,{method:'PUT',body});
+    S.guidanceList=await api('/api/guidance');
+    S.guidance={};
+    S.guidanceList.forEach(g=>{S.guidance[`${g.tab_name}.${g.field_name}`]=g});
+    toast(`Saved guidance for ${field}`);
+    renderFieldGuidanceContent();
+  }catch(e){toast(e.message,'error')}
+}
+
+// ════════════════════════════════════════
 // USER MANAGEMENT PAGE
 // ════════════════════════════════════════
 function renderUsersPage(){
@@ -1021,7 +1268,7 @@ function renderUsersTable(){
     <table class="w-full text-sm">
       <thead><tr class="bg-surface-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
         <th class="px-5 py-3">User</th><th class="px-5 py-3">Username</th><th class="px-5 py-3">Agency</th>
-        <th class="px-5 py-3">Roles</th><th class="px-5 py-3">Status</th><th class="px-5 py-3 text-right">Actions</th>
+        <th class="px-5 py-3">Roles</th><th class="px-5 py-3">Status</th><th class="px-5 py-3">Last Login</th><th class="px-5 py-3">Last Logout</th><th class="px-5 py-3 text-right">Actions</th>
       </tr></thead>
       <tbody class="divide-y divide-gray-50">
         ${filtered.map(u=>`
@@ -1038,6 +1285,8 @@ function renderUsersTable(){
           <td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700">${esc(u.agency||'-')}</span></td>
           <td class="px-5 py-3"><div class="flex flex-wrap gap-1">${(u.roles||[]).map(roleBadge).join('')}</div></td>
           <td class="px-5 py-3">${u.is_active?'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">Active</span>':'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700">Inactive</span>'}</td>
+          <td class="px-5 py-3 text-xs text-slate-600">${u.last_login_at?fmtDateTime(u.last_login_at):'-'}</td>
+          <td class="px-5 py-3 text-xs text-slate-600">${u.last_logout_at?fmtDateTime(u.last_logout_at):'-'}</td>
           <td class="px-5 py-3 text-right">
             <button onclick="showEditUserModal('${u.id}')" class="text-brand-500 hover:text-brand-700 mr-2" title="Edit user"><i class="fas fa-pen text-xs"></i></button>
             <button onclick="toggleUserActive('${u.id}',${!u.is_active})" class="${u.is_active?'text-red-400 hover:text-red-600':'text-emerald-400 hover:text-emerald-600'}" title="${u.is_active?'Deactivate':'Activate'}">
@@ -1291,12 +1540,27 @@ async function openScheme(id){
 
 async function loadSchemeDetail(){
   try{
-    const[data,comments,changes]=await Promise.all([
+    const currentYear=new Date().getFullYear();
+    const years=[currentYear,currentYear+1,currentYear+2];
+    const [data,comments,changes,_guidance,...occ]=await Promise.all([
       api(`/api/schemes/${S.currentScheme}`),
       api(`/api/schemes/${S.currentScheme}/comments`).catch(()=>[]),
-      api(`/api/schemes/${S.currentScheme}/changes`).catch(()=>[])
+      api(`/api/schemes/${S.currentScheme}/changes`).catch(()=>[]),
+      loadFieldGuidance().catch(()=>{}),
+      ...years.map(y=>api(`/api/scheduling/overview/${y}`).catch(()=>null))
     ]);
+
     S.currentSchemeData=data;S.comments=comments||[];S.changes=changes||[];
+
+    // Build slot occupancy map by year/month for capacity coloring
+    S.slotOverviewByYear={};
+    years.forEach((y,idx)=>{
+      const monthCount={1:0,4:0,7:0,11:0};
+      const quarters=occ[idx]?.quarters||[];
+      quarters.forEach(q=>{monthCount[q.month]=(q.bookings||[]).length});
+      S.slotOverviewByYear[y]=monthCount;
+    });
+
     renderDetailContent();
   }catch(e){toast(e.message,'error');S.view='list';render()}
 }
@@ -1306,21 +1570,23 @@ function renderDetailPage(){
   ${renderHeader()}
   <div id="detailRoot" class="fade-in">
     <div class="px-6 py-4 modern-surface flex items-center justify-between gap-3">
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-3 min-w-0">
       <button onclick="S.view='list';render()" class="text-gray-400 hover:text-brand-600 transition">
         <i class="fas fa-arrow-left"></i>
       </button>
       <span class="text-sm text-gray-400">Back to Schemes</span>
-      <span id="detailTitle" class="text-sm font-semibold text-brand-900 ml-2">Loading...</span>
-      <span id="detailBadge" class="ml-2"></span>
+      <div class="ml-2 min-w-0">
+        <div class="flex items-center gap-2">
+          <span id="detailTitle" class="text-sm font-semibold text-brand-900 truncate">Loading...</span>
+          <span id="detailBadge"></span>
+        </div>
+        <div id="detailVersionCtx" class="text-[11px] text-slate-500 truncate"></div>
+      </div>
       </div>
       <div class="hidden md:inline-flex items-center gap-2 text-xs text-slate-500">
         <i class="fas fa-file-waveform text-brand-500"></i>
         Scheme Workspace
       </div>
-    </div>
-    <div class="px-6 pt-2 max-w-7xl mx-auto">
-      <div id="detailVersionCtx" class="text-xs text-slate-500 font-medium"></div>
     </div>
     <div id="detailBody" class="p-6">
       <div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-brand-400 text-2xl"></i></div>
@@ -1435,30 +1701,51 @@ function tip(text){
 // Helper: form field
 function ff(label,key,val,type='text',tipText='',extra=''){
   const v=val??'';const r=ro();
+  const tabName=TABS[S.activeTab]||'overview';
+  const hasGuidance=S.guidance[`${tabName}.${key}`]&&(S.guidance[`${tabName}.${key}`].popover_title||S.guidance[`${tabName}.${key}`].popover_description);
   return `<div class="${extra}">
-    <label class="block text-xs font-medium text-gray-600 mb-1">${label}${tip(tipText)}</label>
+    <label class="block text-xs font-medium text-gray-600 mb-1">
+      ${label}
+      ${hasGuidance?`<button type="button" onclick="showGuidancePopover('${tabName}','${key}',event)" class="ml-2 text-blue-500 hover:text-blue-700 transition" title="Learn more">(?)</button>`:''}
+      ${tip(tipText)}
+    </label>
     <input type="${type}" data-field="${key}" value="${esc(String(v))}" ${r}
       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm transition disabled:bg-gray-50 disabled:text-gray-500" ${type==='number'?'step="any"':''}>
+    ${renderHintText(tabName,key)}
   </div>`;
 }
 
 function fta(label,key,val,tipText='',rows=3){
   const v=val??'';const r=ro();
+  const tabName=TABS[S.activeTab]||'overview';
+  const hasGuidance=S.guidance[`${tabName}.${key}`]&&(S.guidance[`${tabName}.${key}`].popover_title||S.guidance[`${tabName}.${key}`].popover_description);
   return `<div>
-    <label class="block text-xs font-medium text-gray-600 mb-1">${label}${tip(tipText)}</label>
+    <label class="block text-xs font-medium text-gray-600 mb-1">
+      ${label}
+      ${hasGuidance?`<button type="button" onclick="showGuidancePopover('${tabName}','${key}',event)" class="ml-2 text-blue-500 hover:text-blue-700 transition" title="Learn more">(?)</button>`:''}
+      ${tip(tipText)}
+    </label>
     <textarea data-field="${key}" rows="${rows}" ${r}
       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm transition disabled:bg-gray-50 disabled:text-gray-500">${esc(String(v))}</textarea>
+    ${renderHintText(tabName,key)}
   </div>`;
 }
 
 function fsel(label,key,options,val,tipText=''){
   const r=ro();
+  const tabName=TABS[S.activeTab]||'overview';
+  const hasGuidance=S.guidance[`${tabName}.${key}`]&&(S.guidance[`${tabName}.${key}`].popover_title||S.guidance[`${tabName}.${key}`].popover_description);
   return `<div>
-    <label class="block text-xs font-medium text-gray-600 mb-1">${label}${tip(tipText)}</label>
+    <label class="block text-xs font-medium text-gray-600 mb-1">
+      ${label}
+      ${hasGuidance?`<button type="button" onclick="showGuidancePopover('${tabName}','${key}',event)" class="ml-2 text-blue-500 hover:text-blue-700 transition" title="Learn more">(?)</button>`:''}
+      ${tip(tipText)}
+    </label>
     <select data-field="${key}" ${r} class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white transition disabled:bg-gray-50 disabled:text-gray-500">
       <option value="">-- Select --</option>
       ${options.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}
     </select>
+    ${renderHintText(tabName,key)}
   </div>`;
 }
 
@@ -1984,6 +2271,8 @@ function renderSlotPanel(d,canEdit){
   
   // Determine available years (current year + next 2 years)
   const availableYears=[currentYear,currentYear+1,currentYear+2];
+  const selectedYear=S.selectedSlotYear||primarySlot?.year||currentYear;
+  S.selectedSlotYear=selectedYear;
   
   // Quarter months
   const quarterMonths=[
@@ -2001,7 +2290,18 @@ function renderSlotPanel(d,canEdit){
   };
   
   const isEditingSlot=S.editingSlot===S.currentScheme;
-  const canApproveSlot=(hasRole('agency_approver')&&d.status==='pending_review')||(hasRole('mto_admin')&&d.status==='pending_final');
+  const canCreatorEditRejectedSlot=hasRole('agency_creator')&&primarySlot?.approval_status==='rejected';
+  const canEditSlot=canEdit||canCreatorEditRejectedSlot;
+  const canAgencyReviewSlot=hasRole('agency_approver')&&d.status==='pending_review';
+  const canMtoApproveSlot=hasRole('mto_admin')&&d.status==='pending_final';
+
+  const getMonthCount=(year,month)=>((S.slotOverviewByYear?.[year]?.[month])||0);
+  const getMonthStatus=(year,month)=>{
+    const count=getMonthCount(year,month);
+    if(count>=4)return {key:'full',label:'Full',className:'bg-red-100 text-red-700 border-red-200',dot:'bg-red-500'};
+    if(count===3)return {key:'limited',label:'Limited',className:'bg-amber-100 text-amber-700 border-amber-200',dot:'bg-amber-500'};
+    return {key:'available',label:'Available',className:'bg-emerald-100 text-emerald-700 border-emerald-200',dot:'bg-emerald-500'};
+  };
   
   return `
   <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
@@ -2009,7 +2309,7 @@ function renderSlotPanel(d,canEdit){
       <i class="fas fa-calendar-check mr-1"></i>Onboarding Slot
     </h4>
     
-    ${primarySlot?`
+    ${primarySlot&&!isEditingSlot?`
       <!-- Primary Slot Display -->
       <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
         <div class="text-sm font-semibold text-blue-900">${primarySlot.slot_month_name} ${primarySlot.year}</div>
@@ -2028,13 +2328,13 @@ function renderSlotPanel(d,canEdit){
         `:''}
       </div>
       
-      ${canEdit&&primarySlot.approval_status==='rejected'?`
-        <button onclick="S.editingSlot='${S.currentScheme}';render()" class="w-full text-blue-600 hover:text-blue-700 text-xs font-semibold py-2 transition mb-2">
+      ${canEditSlot&&primarySlot.approval_status==='rejected'?`
+        <button onclick="S.editingSlot='${S.currentScheme}';S.selectedSlotYear=${primarySlot.year||selectedYear};S.selectedSlotMonth=${primarySlot.slot_month||'null'};renderDetailContent()" class="w-full text-blue-600 hover:text-blue-700 text-xs font-semibold py-2 transition mb-2">
           <i class="fas fa-edit mr-1"></i>Edit Slot
         </button>
       `:''}
       
-      ${canApproveSlot&&primarySlot.approval_status==='pending'?`
+      ${canMtoApproveSlot&&primarySlot.approval_status==='pending'?`
         <div class="flex gap-2 mt-2">
           <button onclick="approveSlot()" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-1.5 rounded transition">
             <i class="fas fa-check mr-1"></i>Approve
@@ -2043,33 +2343,56 @@ function renderSlotPanel(d,canEdit){
             <i class="fas fa-times mr-1"></i>Reject
           </button>
         </div>
+      `:canAgencyReviewSlot&&primarySlot.approval_status==='pending'?`
+        <div class="mt-2">
+          <button onclick="rejectSlotModal()" class="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold py-1.5 rounded transition">
+            <i class="fas fa-magnifying-glass mr-1"></i>Review & Return with Feedback
+          </button>
+          <p class="text-[10px] text-slate-500 mt-1">Final slot approval is done by MTO Admin.</p>
+        </div>
       `:''}
-    `:canEdit?`
+    `:canEditSlot?`
       <!-- Slot Selection Form -->
       <div class="text-xs text-gray-600 mb-3">Select your preferred onboarding slot and go-live dates</div>
       
       <!-- Year Selector -->
       <div class="mb-3">
         <label class="text-xs font-semibold text-gray-700 block mb-2">Year</label>
-        <select id="slotYear" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs">
-          ${availableYears.map(y=>`<option value="${y}">${y}</option>`).join('')}
+        <select id="slotYear" onchange="S.selectedSlotYear=parseInt(this.value);S.selectedSlotMonth=null;renderDetailContent()" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs">
+          ${availableYears.map(y=>`<option value="${y}" ${selectedYear===y?'selected':''}>${y}</option>`).join('')}
         </select>
       </div>
       
       <!-- Quarter Months -->
       <div class="mb-3">
-        <label class="text-xs font-semibold text-gray-700 block mb-2">Quarter</label>
+        <label class="text-xs font-semibold text-gray-700 block mb-2">Quarter (Max 4 per quarter)</label>
+        <div class="flex items-center gap-3 mb-2 text-[10px] text-gray-600">
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500"></span>Available</span>
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span>Limited</span>
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span>Full</span>
+        </div>
         <div class="grid grid-cols-2 gap-2">
-          ${quarterMonths.map(q=>`
-            <button type="button" onclick="S.selectedSlotMonth=${q.month};render()" 
-              class="p-2 rounded-lg text-xs font-semibold transition ${
-                isMonthPast(parseInt(document.getElementById('slotYear')?.value||currentYear),q.month)?
-                'bg-gray-100 text-gray-400 cursor-not-allowed':'bg-gray-100 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
-              } ${S.selectedSlotMonth===q.month?'bg-blue-600 text-white':''}"
-              ${isMonthPast(parseInt(document.getElementById('slotYear')?.value||currentYear),q.month)?'disabled':''}>
-              ${q.name}
-            </button>
-          `).join('')}
+          ${quarterMonths.map(q=>{
+            const isPast=isMonthPast(selectedYear,q.month);
+            const statusInfo=getMonthStatus(selectedYear,q.month);
+            const count=getMonthCount(selectedYear,q.month);
+            const isFull=statusInfo.key==='full';
+            const isDisabled=isPast||isFull;
+            const isSelected=S.selectedSlotMonth===q.month;
+            const baseClass=isDisabled
+              ?'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
+              :`${statusInfo.className} border hover:opacity-90`;
+            const selectedClass=isSelected?'ring-2 ring-blue-500':'';
+            return `
+            <button type="button" onclick="${isDisabled?'return;':`S.selectedSlotMonth=${q.month};renderDetailContent()`}" 
+              class="p-2 rounded-lg text-xs font-semibold transition ${baseClass} ${selectedClass}"
+              ${isDisabled?'disabled':''}>
+              <div class="flex items-center justify-between">
+                <span>${q.name}</span>
+                <span class="inline-flex items-center gap-1 text-[10px]"><span class="w-1.5 h-1.5 rounded-full ${statusInfo.dot}"></span>${count}/4</span>
+              </div>
+            </button>`;
+          }).join('')}
         </div>
       </div>
       
@@ -2078,17 +2401,22 @@ function renderSlotPanel(d,canEdit){
         <div class="space-y-2 mb-3">
           <div>
             <label class="text-xs font-semibold text-gray-700 block mb-1">Technical Go-Live</label>
-            <input type="date" id="slotTechDate" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs">
+            <input type="date" id="slotTechDate" value="${isEditingSlot&&primarySlot?esc(primarySlot.technical_go_live||''):''}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs">
           </div>
           <div>
             <label class="text-xs font-semibold text-gray-700 block mb-1">Business Go-Live</label>
-            <input type="date" id="slotBizDate" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs">
+            <input type="date" id="slotBizDate" value="${isEditingSlot&&primarySlot?esc(primarySlot.business_go_live||''):''}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs">
           </div>
         </div>
         
         <button onclick="saveSlot()" class="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-lg transition mb-2">
           <i class="fas fa-check mr-1"></i>Save Slot
         </button>
+        ${isEditingSlot?`
+          <button onclick="S.editingSlot=null;S.selectedSlotMonth=null;renderDetailContent()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold py-2 rounded-lg transition mb-2">
+            <i class="fas fa-arrow-left mr-1"></i>Cancel
+          </button>
+        `:''}
       `:''}
     `:''}
     
@@ -2164,6 +2492,9 @@ function renderApprovalPanel(d,canEdit){
       <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Status</h4>
       <div class="text-center py-2">${statusBadge(status)}</div>
       ${d.created_by?`<p class="text-xs text-gray-400 mt-3 text-center">Created by: ${esc(d.created_by)}</p>`:''}
+      <button onclick="startGuidedTour('${TABS[S.activeTab]||'overview'}')" class="w-full mt-3 px-3 py-2 rounded-lg text-xs font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition border border-indigo-200">
+        <i class="fas fa-graduation-cap mr-1"></i>Guide Me
+      </button>
       ${actions?`<div class="mt-4 pt-4 border-t border-gray-100">${actions}</div>`:''}
     </div>
 
@@ -2184,7 +2515,7 @@ function renderApprovalPanel(d,canEdit){
             ${c.stage?`<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">${esc(c.stage)}</span>`:''}
           </div>
           <p class="text-xs text-gray-600">${esc(c.text)}</p>
-          <p class="text-[10px] text-gray-400 mt-1">${c.created_at?new Date(c.created_at).toLocaleString():''}</p>
+          <p class="text-[10px] text-gray-400 mt-1">${c.created_at?fmtDateTime(c.created_at):''}</p>
         </div>`).join('')}
       </div>
       <div class="p-4 border-t border-gray-100">
@@ -2215,7 +2546,7 @@ function renderApprovalPanel(d,canEdit){
         <div class="px-5 py-3 border-b border-gray-50">
           <div class="flex items-center justify-between">
             <span class="text-xs font-semibold text-gray-700">Page: ${esc(c.tab_name||'')}</span>
-            <span class="text-[10px] text-gray-400">${c.timestamp?new Date(c.timestamp).toLocaleString():''}</span>
+            <span class="text-[10px] text-gray-400">${c.timestamp?fmtDateTime(c.timestamp):''}</span>
           </div>
           <p class="text-[10px] text-gray-500">by ${esc(c.changed_by||'')} ${c.changed_by_username?`(${esc(c.changed_by_username)})`:''}</p>
           ${(Array.isArray(c.changes)&&c.changes.length)?`
@@ -2309,7 +2640,7 @@ async function submitCloneVersion(e){
 
 // ── SLOT MANAGEMENT ──
 async function saveSlot(){
-  const year=parseInt(document.getElementById('slotYear')?.value);
+  const year=parseInt(S.selectedSlotYear||document.getElementById('slotYear')?.value);
   const slotMonth=S.selectedSlotMonth;
   const techDate=document.getElementById('slotTechDate')?.value;
   const bizDate=document.getElementById('slotBizDate')?.value;
@@ -2343,12 +2674,13 @@ async function approveSlot(){
 }
 
 function rejectSlotModal(){
-  openModal('Reject Onboarding Slot',`
+  const isAgencyReview=hasRole('agency_approver')&&!hasRole('mto_admin');
+  openModal(isAgencyReview?'Review Slot (Return with Feedback)':'Reject Onboarding Slot',`
   <div class="space-y-4">
-    <p class="text-sm text-gray-600">Suggest a different onboarding slot, e.g., "Please select July instead of April"</p>
+    <p class="text-sm text-gray-600">${isAgencyReview?'Provide review feedback for the agency creator.':'Suggest a different onboarding slot, e.g., "Please select July instead of April"'}</p>
     <textarea id="slotRejectComment" rows="3" placeholder="Feedback on the selected slot..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm transition"></textarea>
     <button onclick="doRejectSlot()" class="w-full bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-lg text-sm font-semibold transition">
-      <i class="fas fa-times mr-2"></i>Reject Slot
+      <i class="fas fa-times mr-2"></i>${isAgencyReview?'Return with Feedback':'Reject Slot'}
     </button>
   </div>`);
 }
@@ -2360,7 +2692,7 @@ async function doRejectSlot(){
       method:'POST',
       body:{approval_status:'rejected',approver_comment:comment}
     });
-    toast('Slot rejected with feedback');
+    toast(hasRole('agency_approver')&&!hasRole('mto_admin')?'Slot review sent with feedback':'Slot rejected with feedback');
     closeModal();
     await loadSchemeDetail();
   }catch(e){toast(e.message,'error')}
@@ -2483,6 +2815,212 @@ function openModal(title,body){
   document.getElementById('modalRoot').classList.remove('hidden');
 }
 function closeModal(){document.getElementById('modalRoot').classList.add('hidden')}
+
+function toggleGlobalHints(){
+  S.showHints=!S.showHints;
+  localStorage.setItem('homes_showHints',S.showHints);
+
+  // Update current screen quickly without losing context
+  if(S.view==='detail'&&S.currentSchemeData){
+    // Repaint header icon + detail fields/hints
+    document.getElementById('app').innerHTML=renderDetailPage();
+    renderDetailContent();
+    return;
+  }
+  if(S.view==='field_management'){
+    document.getElementById('app').innerHTML=renderFieldManagementPage();
+    renderFieldGuidanceContent();
+    return;
+  }
+
+  // Fallback for other screens
+  render();
+}
+
+// ════════════════════════════════════════
+// FIELD GUIDANCE HELPERS
+// ════════════════════════════════════════
+
+// Show inline hint if enabled
+function renderHintText(tab,field){
+  if(!S.showHints)return '';
+  const g=S.guidance[`${tab}.${field}`];
+  if(!g||!g.inline_hint)return '';
+  return `<p class="text-xs text-gray-500 mt-1 pl-1">${esc(g.inline_hint)}</p>`;
+}
+
+// Show popover on click (?) icon
+function showGuidancePopover(tab,field,e){
+  e.preventDefault();
+  e.stopPropagation();
+  const g=S.guidance[`${tab}.${field}`];
+  if(!g)return;
+  
+  const doList=g.popover_do?.length?`<div class="mt-3"><p class="text-xs font-semibold text-emerald-700 mb-1">✅ Do's:</p><ul class="text-xs text-emerald-700 space-y-1">${g.popover_do.map(d=>`<li>• ${esc(d)}</li>`).join('')}</ul></div>`:'';
+  const dontList=g.popover_dont?.length?`<div class="mt-3"><p class="text-xs font-semibold text-red-700 mb-1">❌ Don'ts:</p><ul class="text-xs text-red-700 space-y-1">${g.popover_dont.map(d=>`<li>• ${esc(d)}</li>`).join('')}</ul></div>`:'';
+  const exList=g.popover_examples?.length?`<div class="mt-3"><p class="text-xs font-semibold text-blue-700 mb-1">💡 Examples:</p><ul class="text-xs text-blue-700 space-y-1">${g.popover_examples.map(ex=>`<li>• ${esc(ex)}</li>`).join('')}</ul></div>`:'';
+  
+  openModal(g.popover_title||field,`
+    <div class="space-y-3">
+      ${g.popover_description?`<p class="text-sm text-gray-700">${esc(g.popover_description)}</p>`:''}
+      ${doList}${dontList}${exList}
+    </div>
+  `);
+}
+
+// Walkthrough tour for a tab
+async function startGuidedTour(tab){
+  if(!S.guidanceList.length)await loadFieldGuidance();
+  const activeTab=tab||TABS[S.activeTab]||'overview';
+
+  // Only include fields that are actually rendered on the current screen
+  const visibleFieldKeys=[...new Set(
+    Array.from(document.querySelectorAll('#tabContent [data-field]'))
+      .map(el=>String(el.getAttribute('data-field')||'').trim())
+      .filter(Boolean)
+  )];
+
+  if(!visibleFieldKeys.length){toast('No fields available on this screen','info');return}
+
+  // Build tour items from current screen fields only
+  const fields=visibleFieldKeys.map(fieldKey=>{
+    const g=S.guidance[`${activeTab}.${fieldKey}`]||{};
+    return {
+      tab_name: activeTab,
+      field_name: fieldKey,
+      inline_hint: g.inline_hint||'',
+      popover_title: g.popover_title||'',
+      popover_description: g.popover_description||'',
+      popover_examples: g.popover_examples||[],
+      popover_do: g.popover_do||[],
+      popover_dont: g.popover_dont||[],
+    };
+  });
+
+  window.currentTourTab=activeTab;
+  window.currentTourFields=fields;
+  window.currentTourIdx=0;
+  window.currentTourQuery='';
+  renderGuidedTourModal();
+}
+
+function getFilteredTourIndexes(){
+  const fields=window.currentTourFields||[];
+  const q=String(window.currentTourQuery||'').trim().toLowerCase();
+  if(!q)return fields.map((_,i)=>i);
+  return fields
+    .map((f,i)=>({f,i}))
+    .filter(({f})=>{
+      const label=displayFieldName(f.field_name, window.currentTourTab||f.tab_name||'overview').toLowerCase();
+      const title=String(f.popover_title||'').toLowerCase();
+      const desc=String(f.popover_description||'').toLowerCase();
+      return label.includes(q)||title.includes(q)||desc.includes(q);
+    })
+    .map(x=>x.i);
+}
+
+function setTourQuery(val){
+  window.currentTourQuery=String(val||'');
+  const filtered=getFilteredTourIndexes();
+  if(filtered.length){
+    if(!filtered.includes(window.currentTourIdx))window.currentTourIdx=filtered[0];
+  }
+  renderGuidedTourModal();
+}
+
+function jumpToTourIndex(idx){
+  window.currentTourIdx=idx;
+  renderGuidedTourModal();
+}
+
+function tourPrev(){
+  const filtered=getFilteredTourIndexes();
+  if(!filtered.length)return;
+  const pos=filtered.indexOf(window.currentTourIdx);
+  if(pos>0){
+    window.currentTourIdx=filtered[pos-1];
+    renderGuidedTourModal();
+  }
+}
+
+function tourNext(){
+  const filtered=getFilteredTourIndexes();
+  if(!filtered.length)return;
+  const pos=filtered.indexOf(window.currentTourIdx);
+  if(pos>=0&&pos<filtered.length-1){
+    window.currentTourIdx=filtered[pos+1];
+    renderGuidedTourModal();
+  }
+}
+
+function renderGuidedTourModal(){
+  const fields=window.currentTourFields||[];
+  const tab=window.currentTourTab||'overview';
+  if(!fields.length){toast('No guidance available for this screen','info');return}
+
+  const filtered=getFilteredTourIndexes();
+  if(!filtered.length){
+    openModal('📖 Guide Me',`
+      <div class="space-y-3">
+        <input type="text" value="${esc(window.currentTourQuery||'')}" oninput="setTourQuery(this.value)" placeholder="Search field guidance..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+        <div class="text-sm text-gray-500">No guidance matches your search.</div>
+        <div class="pt-2 flex justify-end">
+          <button onclick="closeModal()" class="px-3 py-2 rounded-lg text-xs bg-gray-100 hover:bg-gray-200 font-medium">Close</button>
+        </div>
+      </div>
+    `);
+    return;
+  }
+
+  if(!filtered.includes(window.currentTourIdx))window.currentTourIdx=filtered[0];
+  const idx=window.currentTourIdx;
+  const f=fields[idx];
+  const activePos=filtered.indexOf(idx);
+  const totalFiltered=filtered.length;
+
+  const doList=f.popover_do?.length?`<div class="mt-3"><p class="text-xs font-semibold text-emerald-700 mb-1">✅ Do's:</p><ul class="text-xs text-emerald-700 space-y-1">${f.popover_do.map(d=>`<li>• ${esc(d)}</li>`).join('')}</ul></div>`:'';
+  const dontList=f.popover_dont?.length?`<div class="mt-3"><p class="text-xs font-semibold text-red-700 mb-1">❌ Don'ts:</p><ul class="text-xs text-red-700 space-y-1">${f.popover_dont.map(d=>`<li>• ${esc(d)}</li>`).join('')}</ul></div>`:'';
+  const exList=f.popover_examples?.length?`<div class="mt-3"><p class="text-xs font-semibold text-blue-700 mb-1">💡 Examples:</p><ul class="text-xs text-blue-700 space-y-1">${f.popover_examples.map(ex=>`<li>• ${esc(ex)}</li>`).join('')}</ul></div>`:'';
+
+  const guideTitle=f.popover_title||displayFieldName(f.field_name, tab);
+  openModal(`📖 Guide: ${guideTitle}`,`
+    <div class="space-y-4">
+      <div class="flex items-center gap-2">
+        <input type="text" value="${esc(window.currentTourQuery||'')}" oninput="setTourQuery(this.value)" placeholder="Search field guidance..." class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+        <span class="text-xs text-slate-500 px-2 py-1 rounded-md bg-slate-100">${activePos+1}/${totalFiltered}</span>
+      </div>
+
+      <div class="grid grid-cols-12 gap-3">
+        <div class="col-span-5 border border-gray-200 rounded-lg p-2 max-h-72 overflow-auto bg-slate-50/60">
+          ${filtered.map(i=>{
+            const item=fields[i];
+            const label=displayFieldName(item.field_name, tab);
+            const active=i===idx;
+            return `<button onclick="jumpToTourIndex(${i})" class="w-full text-left px-2 py-2 rounded-md text-xs mb-1 border transition ${active?'bg-brand-600 text-white border-brand-600':'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'}">${esc(label)}</button>`;
+          }).join('')}
+        </div>
+
+        <div class="col-span-7">
+          <div class="p-3 rounded-lg bg-blue-50 border border-blue-200">
+            <p class="text-xs text-blue-700"><strong>Field:</strong> ${esc(displayFieldName(f.field_name, tab))}</p>
+            ${f.inline_hint?`<p class="text-xs text-blue-700 mt-1"><strong>Hint:</strong> ${esc(f.inline_hint)}</p>`:''}
+          </div>
+          <div class="space-y-3 mt-3">
+            ${f.popover_description?`<p class="text-sm text-gray-700">${esc(f.popover_description)}</p>`:'<p class="text-sm text-gray-400 italic">No detailed guidance added yet.</p>'}
+            ${doList}${dontList}${exList}
+          </div>
+        </div>
+      </div>
+
+      <div class="border-t pt-4 flex items-center gap-2">
+        <button onclick="tourPrev()" ${activePos===0?'disabled':''} class="px-3 py-2 rounded-lg text-xs font-medium ${activePos===0?'bg-gray-100 text-gray-400 cursor-not-allowed':'bg-gray-200 hover:bg-gray-300 text-gray-800'}">← Back</button>
+        <button onclick="tourNext()" ${activePos===totalFiltered-1?'disabled':''} class="px-3 py-2 rounded-lg text-xs font-medium ${activePos===totalFiltered-1?'bg-slate-100 text-slate-400 cursor-not-allowed':'bg-brand-600 hover:bg-brand-700 text-white'}">Next →</button>
+        <button onclick="window.currentTourQuery='';setTourQuery('')" class="px-3 py-2 rounded-lg text-xs bg-white border border-slate-200 hover:bg-slate-50 font-medium">Clear Search</button>
+        <button onclick="closeModal();window.currentTourIdx=-1" class="ml-auto px-3 py-2 rounded-lg text-xs bg-gray-100 hover:bg-gray-200 font-medium">Done</button>
+      </div>
+    </div>
+  `);
+}
 
 // ════════════════════════════════════════
 // INIT

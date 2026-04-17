@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from app.config import get_db
-from app.models import User, AGENCIES
+from app.models import User, AGENCIES, sg_now
 
 SECRET_KEY = "homes-demo-secret-key-2026-extended!"
 ALGORITHM = "HS256"
@@ -36,7 +36,16 @@ class UserUpdate(BaseModel):
 
 
 def _user_dict(u: User) -> dict:
-    return {"id": u.id, "username": u.username, "roles": u.roles or [], "agency": u.agency, "display_name": u.display_name, "is_active": u.is_active}
+    return {
+        "id": u.id,
+        "username": u.username,
+        "roles": u.roles or [],
+        "agency": u.agency,
+        "display_name": u.display_name,
+        "is_active": u.is_active,
+        "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+        "last_logout_at": u.last_logout_at.isoformat() if u.last_logout_at else None,
+    }
 
 
 VALID_ROLE_SET = {"agency_creator", "agency_approver", "mto_admin"}
@@ -94,8 +103,17 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
+    user.last_login_at = sg_now()
+    await db.commit()
     token = create_token(user)
     return {"token": token, "user": _user_dict(user)}
+
+
+@router.post("/logout")
+async def logout(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    user.last_logout_at = sg_now()
+    await db.commit()
+    return {"ok": True, "last_logout_at": user.last_logout_at.isoformat() if user.last_logout_at else None}
 
 
 @router.get("/me")
