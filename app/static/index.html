@@ -269,6 +269,9 @@ let S={
   slots:[],
   slotNotifications:[],
   selectedSlotYear:null,
+  tab5Section:'api',
+  tab5Search:'',
+  tab5GroupOpen:{},
   showHints:localStorage.getItem('homes_showHints')!=='false',
   guidance:{},  // Cached guidance by tab.field
   guidanceList:[],
@@ -2102,9 +2105,8 @@ function removeRankRow(i){
 }
 
 // ── TAB 5: API & BATCH INTERFACES ──
-function renderTab5(){
-  const d=getTabData('api_interfaces');
-  const apis=[
+function tab5ApiItems(){
+  return [
     ['P12-API1','Submit Consent'],['P12-API2','Invalidate Consent'],['P12-API3','Withdraw Consent'],
     ['P12-API4','Query Consent'],['P12-API5','Check Consent'],['P12-API6','Submit Enquiry'],
     ['P12-API7','Get Enquiry Details'],['P12-API8','Query RHH MTC'],['P12-API9','Query NHH MTC'],
@@ -2114,7 +2116,10 @@ function renderTab5(){
     ['P12-API18','Mapping of MT Result Across Schemes'],['P12-API19','Get Latest MT Result Set'],
     ['P20-API','Query MSHL MT Result']
   ];
-  const batches=[
+}
+
+function tab5BatchItems(){
+  return [
     ['P13-Batch1','Submit Consent'],['P13-Batch2','Invalidate Consent'],['P13-Batch3','Withdraw Consent'],
     ['P13-Batch4','Check Consent'],['P13-Batch5','Submit Enquiry'],['P13-Batch6','Get Enquiry Details'],
     ['P13-Batch7','Completed Enquiries'],['P13-Batch8','Query RHH MTC'],['P13-Batch9','Query NHH MTC'],
@@ -2124,78 +2129,236 @@ function renderTab5(){
     ['P13-Batch17','Get Latest MT Result Set'],['P13-Batch18','Scheme Beneficiary Delta Interface'],
     ['P20-Batch','Query Latest MSHL MT Result']
   ];
-  const sftpItems=[
-    'Submit Supporting Documents - SubmitMTRequest',
-    'Submit Supporting Documents - SubmitConsent',
-    'Submit Supporting Documents - SubmitEnquiry',
-    'Submit Supporting Documents - EscalateMTRequest',
-    'Missing Support Documents',
-    'Unrelated Documents',
-    'Viewing Supporting Document (Document Viewer)'
+}
+
+function tab5SftpItems(){
+  return [
+    ['sftp_1','Submit Supporting Documents - SubmitMTRequest'],
+    ['sftp_2','Submit Supporting Documents - SubmitConsent'],
+    ['sftp_3','Submit Supporting Documents - SubmitEnquiry'],
+    ['sftp_4','Submit Supporting Documents - EscalateMTRequest'],
+    ['sftp_5','Missing Support Documents'],
+    ['sftp_6','Unrelated Documents'],
+    ['sftp_7','Viewing Supporting Document (Document Viewer)'],
+    ['sftp_p25','P25 SFTP Download of Scheduled Reports']
   ];
+}
+
+function ensureTab5UiState(){
+  if(!S.tab5Section)S.tab5Section='api';
+  if(typeof S.tab5Search!=='string')S.tab5Search='';
+  if(!S.tab5GroupOpen||typeof S.tab5GroupOpen!=='object')S.tab5GroupOpen={};
+}
+
+function syncTab5DraftFromDom(){
+  if(S.activeTab!==5)return;
+  const d=getTabData('api_interfaces');
+  document.querySelectorAll('#tabContent [data-field]').forEach(el=>{
+    const k=el.dataset.field;
+    if(!k)return;
+    if(el.tagName==='SELECT')d[k]=el.value;
+    else if(el.type==='checkbox')d[k]=el.checked;
+    else d[k]=el.value;
+  });
+}
+
+function setTab5Section(section){
+  syncTab5DraftFromDom();
+  S.tab5Section=section;
+  S.tab5Search='';
+  renderTabContent();
+}
+
+function setTab5Search(value){
+  syncTab5DraftFromDom();
+  S.tab5Search=String(value||'');
+  renderTabContent();
+}
+
+function tab5CategoryForName(name){
+  const n=String(name||'').toLowerCase();
+  if(n.includes('mshl'))return 'MSHL';
+  if(n.includes('consent'))return 'Consent';
+  if(n.includes('enquir'))return 'Enquiry';
+  if(n.includes('mtc'))return 'MTC Query';
+  if(n.includes('mt request'))return 'MT Request';
+  if(n.includes('mt result'))return 'MT Result';
+  return 'Others';
+}
+
+function isTab5GroupOpen(section,group){
+  ensureTab5UiState();
+  const key=`${section}|${group}`;
+  if(!(key in S.tab5GroupOpen))S.tab5GroupOpen[key]=true;
+  return !!S.tab5GroupOpen[key];
+}
+
+function toggleTab5Group(section,group){
+  syncTab5DraftFromDom();
+  const key=`${section}|${group}`;
+  S.tab5GroupOpen[key]=!isTab5GroupOpen(section,group);
+  renderTabContent();
+}
+
+function setTab5ToggleValue(field,enabled,clearMetrics=false){
+  syncTab5DraftFromDom();
+  const d=getTabData('api_interfaces');
+  d[field]=enabled?'Yes':'No';
+  if(clearMetrics&&!enabled&&field.endsWith('_used')){
+    const base=field.replace(/_used$/,'');
+    d[base+'_avg']='';
+    d[base+'_peak']='';
+  }
+  renderTabContent();
+}
+
+function renderTab5(){
+  ensureTab5UiState();
+  const d=getTabData('api_interfaces');
+  const apis=tab5ApiItems();
+  const batches=tab5BatchItems();
+  const sftpItems=tab5SftpItems();
   const r=ro();
+  const isRead=isReadOnly();
+  const q=(S.tab5Search||'').trim().toLowerCase();
+  const groupOrder=['Consent','Enquiry','MTC Query','MT Request','MT Result','MSHL','Others'];
+
+  const selectedApi=apis.filter(([code])=>d['api_'+code.replace(/-/g,'_')+'_used']==='Yes').length;
+  const selectedBatch=batches.filter(([code])=>d['batch_'+code.replace(/-/g,'_')+'_used']==='Yes').length;
+  const selectedSftp=sftpItems.filter(([key])=>d[key]==='Yes').length;
+
+  const tabs=[
+    {key:'api',label:'API',icon:'fa-plug',selected:selectedApi,total:apis.length},
+    {key:'batch',label:'Batch',icon:'fa-database',selected:selectedBatch,total:batches.length},
+    {key:'sftp',label:'SFTP',icon:'fa-folder-open',selected:selectedSftp,total:sftpItems.length},
+  ];
+
+  function rowToggle(field,enabled,clearMetrics=false){
+    if(isRead){
+      return `<span class="px-2 py-1 rounded-full text-[10px] font-semibold ${enabled?'bg-blue-100 text-blue-700 border border-blue-200':'bg-gray-100 text-gray-500 border border-gray-200'}">${enabled?'Enabled':'Disabled'}</span>`;
+    }
+    return `<div class="inline-flex border border-gray-200 rounded-lg overflow-hidden text-[10px] font-semibold">
+      <button type="button" onclick="setTab5ToggleValue('${field}',true,${clearMetrics?'true':'false'})" class="px-2 py-1 ${enabled?'bg-blue-600 text-white':'bg-white text-gray-600 hover:bg-blue-50'}">On</button>
+      <button type="button" onclick="setTab5ToggleValue('${field}',false,${clearMetrics?'true':'false'})" class="px-2 py-1 ${!enabled?'bg-gray-600 text-white':'bg-white text-gray-600 hover:bg-gray-100'}">Off</button>
+    </div>`;
+  }
+
+  function renderGroupedInterface(items,type){
+    const prefix=type==='api'?'api_':'batch_';
+    const avgLabel=type==='api'?'Avg calls/hr':'Avg records/day';
+    const peakLabel=type==='api'?'Peak calls/hr':'Peak records/day';
+
+    const mapped=items.map(([code,name])=>{
+      const key=code.replace(/-/g,'_');
+      const usedField=`${prefix}${key}_used`;
+      const avgField=`${prefix}${key}_avg`;
+      const peakField=`${prefix}${key}_peak`;
+      const enabled=d[usedField]==='Yes';
+      return {code,name,usedField,avgField,peakField,enabled,group:tab5CategoryForName(name)};
+    }).filter(x=>!q||x.code.toLowerCase().includes(q)||x.name.toLowerCase().includes(q));
+
+    if(!mapped.length){
+      return `<div class="text-sm text-gray-500 py-6 text-center border border-dashed border-gray-300 rounded-xl">No interfaces match your search.</div>`;
+    }
+
+    return groupOrder.map(group=>{
+      const rows=mapped.filter(x=>x.group===group);
+      if(!rows.length)return '';
+      const open=isTab5GroupOpen(type,group);
+      const selected=rows.filter(x=>x.enabled).length;
+      return `
+      <div class="border border-gray-200 rounded-xl overflow-hidden mb-3">
+        <button type="button" onclick="toggleTab5Group('${type}','${group}')" class="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition">
+          <div class="flex items-center gap-2">
+            <i class="fas ${open?'fa-chevron-down':'fa-chevron-right'} text-xs text-slate-500"></i>
+            <span class="text-sm font-semibold text-slate-700">${group}</span>
+          </div>
+          <span class="text-[11px] text-slate-600">${selected}/${rows.length} enabled</span>
+        </button>
+        <div class="${open?'block':'hidden'} p-3 space-y-2 bg-white">
+          ${rows.map(x=>`
+          <div class="rounded-lg border ${x.enabled?'border-blue-200 bg-blue-50/40':'border-gray-200 bg-white'} p-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-[11px] font-mono text-slate-500">${x.code}</div>
+                <div class="text-sm text-slate-800 font-medium">${x.name}</div>
+              </div>
+              ${rowToggle(x.usedField,x.enabled,true)}
+            </div>
+
+            <input type="hidden" data-field="${x.usedField}" value="${x.enabled?'Yes':'No'}">
+
+            ${x.enabled?`
+            <div class="grid grid-cols-2 gap-3 mt-3">
+              <div>
+                <label class="block text-[11px] text-slate-600 mb-1">${avgLabel}</label>
+                <input type="number" data-field="${x.avgField}" value="${d[x.avgField]||''}" ${r} class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs disabled:bg-gray-50">
+              </div>
+              <div>
+                <label class="block text-[11px] text-slate-600 mb-1">${peakLabel}</label>
+                <input type="number" data-field="${x.peakField}" value="${d[x.peakField]||''}" ${r} class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs disabled:bg-gray-50">
+              </div>
+            </div>
+            `:`
+            <input type="hidden" data-field="${x.avgField}" value="${d[x.avgField]||''}">
+            <input type="hidden" data-field="${x.peakField}" value="${d[x.peakField]||''}">
+            <div class="mt-2 text-[11px] text-slate-500">Enable to provide volume estimates.</div>
+            `}
+          </div>
+          `).join('')}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function renderSftpSection(){
+    const filtered=sftpItems.filter(([k,name])=>!q||k.toLowerCase().includes(q)||name.toLowerCase().includes(q));
+    if(!filtered.length){
+      return `<div class="text-sm text-gray-500 py-6 text-center border border-dashed border-gray-300 rounded-xl">No SFTP items match your search.</div>`;
+    }
+    return `<div class="space-y-2">
+      ${filtered.map(([field,name],idx)=>{
+        const enabled=d[field]==='Yes';
+        return `<div class="rounded-lg border ${enabled?'border-blue-200 bg-blue-50/40':'border-gray-200 bg-white'} px-3 py-2.5 flex items-center justify-between gap-3">
+          <div>
+            <div class="text-sm text-slate-800">${idx+1}. ${name}</div>
+            <div class="text-[11px] text-slate-500">${field}</div>
+          </div>
+          <div>
+            ${rowToggle(field,enabled,false)}
+            <input type="hidden" data-field="${field}" value="${enabled?'Yes':'No'}">
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  const active=tabs.find(t=>t.key===S.tab5Section)||tabs[0];
   return `
-  ${sectionHead('API Interfaces','fa-plug')}
-  <div class="overflow-x-auto mb-6">
-    <table class="w-full text-xs">
-      <thead><tr class="bg-surface-50 text-left">
-        <th class="px-3 py-2">Interface No.</th><th class="px-3 py-2">Name</th><th class="px-3 py-2">Used</th>
-        <th class="px-3 py-2">Avg calls/hr</th><th class="px-3 py-2">Peak calls/hr</th>
-      </tr></thead>
-      <tbody class="divide-y divide-gray-100">
-        ${apis.map(([code,name])=>{
-          const k=code.replace(/-/g,'_');
-          return `<tr>
-            <td class="px-3 py-1.5 font-mono text-gray-500">${code}</td>
-            <td class="px-3 py-1.5 text-gray-700">${name}</td>
-            <td class="px-3 py-1.5"><select data-field="api_${k}_used" ${r} class="border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
-              <option value="">--</option><option ${d['api_'+k+'_used']==='Yes'?'selected':''}>Yes</option><option ${d['api_'+k+'_used']==='No'?'selected':''}>No</option></select></td>
-            <td class="px-3 py-1.5"><input type="number" data-field="api_${k}_avg" value="${d['api_'+k+'_avg']||''}" ${r} class="w-20 border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
-            <td class="px-3 py-1.5"><input type="number" data-field="api_${k}_peak" value="${d['api_'+k+'_peak']||''}" ${r} class="w-20 border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-  </div>
-
-  ${sectionHead('Batch Interfaces','fa-database')}
-  <div class="overflow-x-auto mb-6">
-    <table class="w-full text-xs">
-      <thead><tr class="bg-surface-50 text-left">
-        <th class="px-3 py-2">Interface No.</th><th class="px-3 py-2">Name</th><th class="px-3 py-2">Used</th>
-        <th class="px-3 py-2">Avg records/day</th><th class="px-3 py-2">Peak records/day</th>
-      </tr></thead>
-      <tbody class="divide-y divide-gray-100">
-        ${batches.map(([code,name])=>{
-          const k=code.replace(/-/g,'_');
-          return `<tr>
-            <td class="px-3 py-1.5 font-mono text-gray-500">${code}</td>
-            <td class="px-3 py-1.5 text-gray-700">${name}</td>
-            <td class="px-3 py-1.5"><select data-field="batch_${k}_used" ${r} class="border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
-              <option value="">--</option><option ${d['batch_'+k+'_used']==='Yes'?'selected':''}>Yes</option><option ${d['batch_'+k+'_used']==='No'?'selected':''}>No</option></select></td>
-            <td class="px-3 py-1.5"><input type="number" data-field="batch_${k}_avg" value="${d['batch_'+k+'_avg']||''}" ${r} class="w-20 border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
-            <td class="px-3 py-1.5"><input type="number" data-field="batch_${k}_peak" value="${d['batch_'+k+'_peak']||''}" ${r} class="w-20 border border-gray-200 rounded px-2 py-1 text-xs disabled:bg-gray-50"></td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-  </div>
-
-  ${sectionHead('SFTP Setups','fa-folder-open')}
-  <div class="space-y-3 mb-4">
-    ${sftpItems.map((item,i)=>`
-    <div class="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-2">
-      <span class="text-xs text-gray-700">${i+1}. ${item}</span>
-      <select data-field="sftp_${i+1}" ${r} class="border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
-        <option value="">--</option><option ${d['sftp_'+(i+1)]==='Yes'?'selected':''}>Yes</option><option ${d['sftp_'+(i+1)]==='No'?'selected':''}>No</option>
-      </select>
-    </div>`).join('')}
-    <div class="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-2">
-      <span class="text-xs text-gray-700">P25 SFTP Download of Scheduled Reports</span>
-      <select data-field="sftp_p25" ${r} class="border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
-        <option value="">--</option><option ${d.sftp_p25==='Yes'?'selected':''}>Yes</option><option ${d.sftp_p25==='No'?'selected':''}>No</option>
-      </select>
+  ${sectionHead('API & Batch Interfaces','fa-plug')}
+  <div class="rounded-xl border border-gray-200 bg-white p-4 mb-4">
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      ${tabs.map(t=>`
+        <button type="button" onclick="setTab5Section('${t.key}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${S.tab5Section===t.key?'bg-brand-600 text-white border-brand-600':'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}">
+          <i class="fas ${t.icon} mr-1"></i>${t.label}
+          <span class="ml-1 ${S.tab5Section===t.key?'text-white/90':'text-gray-500'}">${t.selected}/${t.total}</span>
+        </button>
+      `).join('')}
     </div>
+
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+      <div class="text-xs text-slate-600">
+        <span class="font-semibold">Summary:</span> ${active.selected} of ${active.total} ${active.label} interfaces enabled
+      </div>
+      <div class="relative w-full md:w-72">
+        <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs"></i>
+        <input type="text" value="${esc(S.tab5Search||'')}" oninput="setTab5Search(this.value)" placeholder="Search ${active.label} interfaces..." class="w-full border border-gray-200 rounded-lg pl-8 pr-3 py-2 text-xs">
+      </div>
+    </div>
+
+    ${S.tab5Section==='api'?renderGroupedInterface(apis,'api'):''}
+    ${S.tab5Section==='batch'?renderGroupedInterface(batches,'batch'):''}
+    ${S.tab5Section==='sftp'?renderSftpSection():''}
   </div>`;
 }
 
