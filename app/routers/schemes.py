@@ -14,7 +14,7 @@ from app.auth import get_current_user
 from app.models import (
     User, SchemeOverview, SchemeSubmission, SchemeMTParameters,
     TransactionDetails, HOMESFunctions, MTBands, APIBatchInterfaces,
-    ChangeLog, Comment, SubmissionStatus, OnboardingSlot,
+    ChangeLog, Comment, SubmissionStatus, OnboardingSlot, SchemeMaster,
 )
 
 router = APIRouter(prefix="/api/schemes", tags=["schemes"])
@@ -25,6 +25,8 @@ class SchemeCreate(BaseModel):
     agency: str | None = None
     scheme_name: str
     scheme_code: str | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
     legislated_or_consent: str | None = None
     consent_scope: str | None = None
     background_info: dict | None = None
@@ -33,9 +35,21 @@ class SchemeUpdate(BaseModel):
     agency: str | None = None
     scheme_name: str | None = None
     scheme_code: str | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
     legislated_or_consent: str | None = None
     consent_scope: str | None = None
     background_info: dict | None = None
+
+
+class CloneVersionBody(BaseModel):
+    valid_from: str
+    valid_to: str
+
+
+class RetireBody(BaseModel):
+    retire_date: str | None = None
+    comment: str | None = None
 
 class TabUpdate(BaseModel):
     data: dict
@@ -96,10 +110,87 @@ def _can_edit_submission(user: User, sub: SchemeSubmission) -> bool:
     return False
 
 
+def _parse_iso_date(value: str | None, field_name: str) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be in YYYY-MM-DD format")
+
+
+def _effective_status(sub: SchemeSubmission) -> str:
+    if sub.status == SubmissionStatus.active.value and sub.valid_to and sub.valid_to < date.today():
+        return SubmissionStatus.expired.value
+    return sub.status
+
+
+async def _ensure_master_for_submission(db: AsyncSession, sub: SchemeSubmission, user: User | None = None):
+    if sub.scheme_master_id:
+        return
+    ov = sub.overview
+    if not ov:
+        return
+    m = SchemeMaster(
+        agency=ov.agency or "",
+        scheme_name=ov.scheme_name,
+        scheme_code=ov.scheme_code,
+        created_by=(user.id if user else sub.created_by),
+    )
+    db.add(m)
+    await db.flush()
+    sub.scheme_master_id = m.id
+
+
+async def _validate_version_window(
+    db: AsyncSession,
+    master_id: str,
+    valid_from: date | None,
+    valid_to: date | None,
+    *,
+    exclude_submission_id: str | None = None,
+):
+    if not valid_from or not valid_to:
+        return
+    if valid_from > valid_to:
+        raise HTTPException(status_code=400, detail="valid_from cannot be after valid_to")
+
+    res = await db.execute(
+        select(SchemeSubmission).where(SchemeSubmission.scheme_master_id == master_id)
+    )
+    versions = res.scalars().all()
+
+    for v in versions:
+        if exclude_submission_id and v.id == exclude_submission_id:
+            continue
+        if not v.valid_from or not v.valid_to:
+            continue
+        if not (valid_to < v.valid_from or valid_from > v.valid_to):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Version date range overlaps with version v{v.version} ({v.valid_from} to {v.valid_to})",
+            )
+
+    active_versions = [v for v in versions if _effective_status(v) == SubmissionStatus.active.value and (not exclude_submission_id or v.id != exclude_submission_id)]
+    if active_versions:
+        active = active_versions[0]
+        if not active.valid_to:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Current active version v{active.version} has no end date. Set valid_to before creating a new version.",
+            )
+        if active.valid_to and valid_from <= active.valid_to:
+            raise HTTPException(
+                status_code=400,
+                detail=f"New version cannot start before active version v{active.version} ends on {active.valid_to}",
+            )
+
+
 async def _get_submission(db: AsyncSession, scheme_id: str) -> SchemeSubmission:
     result = await db.execute(
         select(SchemeSubmission)
         .options(
+            selectinload(SchemeSubmission.master),
             selectinload(SchemeSubmission.overview),
             selectinload(SchemeSubmission.mt_parameters),
             selectinload(SchemeSubmission.transactions),
@@ -119,6 +210,8 @@ async def _get_submission(db: AsyncSession, scheme_id: str) -> SchemeSubmission:
 
 def _sub_to_dict(sub: SchemeSubmission) -> dict:
     ov = sub.overview
+    master = sub.master
+    eff_status = _effective_status(sub)
     slots = []
     if sub.onboarding_slots:
         for slot in sorted(sub.onboarding_slots, key=lambda x: (x.is_additional, x.slot_month)):
@@ -138,14 +231,19 @@ def _sub_to_dict(sub: SchemeSubmission) -> dict:
     
     return {
         "id": sub.id,
-        "agency": ov.agency if ov else None,
-        "scheme_name": ov.scheme_name if ov else None,
-        "scheme_code": ov.scheme_code if ov else None,
+        "scheme_master_id": sub.scheme_master_id,
+        "agency": (master.agency if master else (ov.agency if ov else None)),
+        "scheme_name": (master.scheme_name if master else (ov.scheme_name if ov else None)),
+        "scheme_code": (master.scheme_code if master else (ov.scheme_code if ov else None)),
         "legislated_or_consent": ov.legislated_or_consent if ov else None,
         "consent_scope": ov.consent_scope if ov else None,
         "background_info": ov.background_info if ov else None,
-        "status": sub.status,
+        "status": eff_status,
         "version": sub.version,
+        "version_label": f"v{sub.version}",
+        "valid_from": sub.valid_from.isoformat() if sub.valid_from else None,
+        "valid_to": sub.valid_to.isoformat() if sub.valid_to else None,
+        "cloned_from_submission_id": sub.cloned_from_submission_id,
         "created_by": sub.creator.display_name if sub.creator else None,
         "created_at": sub.created_at.isoformat() if sub.created_at else None,
         "updated_at": sub.updated_at.isoformat() if sub.updated_at else None,
@@ -228,7 +326,7 @@ def _deep_field_diff(old_value, new_value, path: str = "") -> list[dict]:
 async def list_schemes(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     query = (
         select(SchemeSubmission)
-        .options(selectinload(SchemeSubmission.overview), selectinload(SchemeSubmission.creator), selectinload(SchemeSubmission.onboarding_slots))
+        .options(selectinload(SchemeSubmission.master), selectinload(SchemeSubmission.overview), selectinload(SchemeSubmission.creator), selectinload(SchemeSubmission.onboarding_slots))
         .order_by(SchemeSubmission.created_at.desc())
     )
     # Agency-scoped: non-admin users only see their own agency's schemes
@@ -239,11 +337,15 @@ async def list_schemes(db: AsyncSession = Depends(get_db), user: User = Depends(
     return [
         {
             "id": s.id,
-            "scheme_name": s.overview.scheme_name if s.overview else None,
-            "scheme_code": s.overview.scheme_code if s.overview else None,
-            "agency": s.overview.agency if s.overview else None,
-            "status": s.status,
+            "scheme_master_id": s.scheme_master_id,
+            "scheme_name": s.master.scheme_name if s.master else (s.overview.scheme_name if s.overview else None),
+            "scheme_code": s.master.scheme_code if s.master else (s.overview.scheme_code if s.overview else None),
+            "agency": s.master.agency if s.master else (s.overview.agency if s.overview else None),
+            "status": _effective_status(s),
             "version": s.version,
+            "version_label": f"v{s.version}",
+            "valid_from": s.valid_from.isoformat() if s.valid_from else None,
+            "valid_to": s.valid_to.isoformat() if s.valid_to else None,
             "created_by": s.creator.display_name if s.creator else None,
             "updated_at": s.updated_at.isoformat() if s.updated_at else None,
             "primary_slot": next(
@@ -261,10 +363,40 @@ async def create_scheme(body: SchemeCreate, db: AsyncSession = Depends(get_db), 
     _require_role(user, "agency_creator")
     if body.agency and body.agency != user.agency:
         raise HTTPException(status_code=403, detail="Creators can only create schemes for their own agency")
+    valid_from = _parse_iso_date(body.valid_from, "valid_from")
+    valid_to = _parse_iso_date(body.valid_to, "valid_to")
+    if valid_from and valid_to and valid_from > valid_to:
+        raise HTTPException(status_code=400, detail="valid_from cannot be after valid_to")
+
+    # Find or create master record (Agency + Scheme Name + Scheme Code)
+    agency_val = body.agency or user.agency
+    master_res = await db.execute(
+        select(SchemeMaster).where(
+            SchemeMaster.agency == agency_val,
+            SchemeMaster.scheme_name == body.scheme_name,
+            SchemeMaster.scheme_code == body.scheme_code,
+        )
+    )
+    master = master_res.scalar_one_or_none()
+    if not master:
+        master = SchemeMaster(
+            agency=agency_val or "",
+            scheme_name=body.scheme_name,
+            scheme_code=body.scheme_code,
+            created_by=user.id,
+        )
+        db.add(master)
+        await db.flush()
+
+    vres = await db.execute(select(SchemeSubmission).where(SchemeSubmission.scheme_master_id == master.id))
+    existing_versions = vres.scalars().all()
+    next_version = (max([v.version for v in existing_versions], default=0) + 1)
+    await _validate_version_window(db, master.id, valid_from, valid_to)
+
     overview = SchemeOverview(
-        agency=body.agency or user.agency,
-        scheme_name=body.scheme_name,
-        scheme_code=body.scheme_code,
+        agency=agency_val,
+        scheme_name=master.scheme_name,
+        scheme_code=master.scheme_code,
         legislated_or_consent=body.legislated_or_consent,
         consent_scope=body.consent_scope,
         background_info=body.background_info,
@@ -273,14 +405,25 @@ async def create_scheme(body: SchemeCreate, db: AsyncSession = Depends(get_db), 
     await db.flush()
 
     submission = SchemeSubmission(
+        scheme_master_id=master.id,
         scheme_overview_id=overview.id,
         status=SubmissionStatus.draft.value,
+        version=next_version,
+        valid_from=valid_from,
+        valid_to=valid_to,
         created_by=user.id,
     )
     db.add(submission)
     await db.commit()
     await db.refresh(submission)
-    return {"id": submission.id, "scheme_name": overview.scheme_name, "status": submission.status}
+    return {
+        "id": submission.id,
+        "scheme_master_id": master.id,
+        "scheme_name": overview.scheme_name,
+        "status": submission.status,
+        "version": submission.version,
+        "version_label": f"v{submission.version}",
+    }
 
 
 @router.get("/{scheme_id}")
@@ -293,6 +436,7 @@ async def get_scheme(scheme_id: str, db: AsyncSession = Depends(get_db), user: U
 @router.put("/{scheme_id}")
 async def update_scheme(scheme_id: str, body: SchemeUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     sub = await _get_submission(db, scheme_id)
+    await _ensure_master_for_submission(db, sub, user)
     _assert_agency_access(user, sub)
     if not _can_edit_submission(user, sub):
         raise HTTPException(400, "You are not allowed to edit this scheme in its current status")
@@ -304,11 +448,30 @@ async def update_scheme(scheme_id: str, body: SchemeUpdate, db: AsyncSession = D
         if new_val is not None:
             requested_updates[field] = new_val
 
+    new_valid_from = _parse_iso_date(body.valid_from, "valid_from") if body.valid_from is not None else sub.valid_from
+    new_valid_to = _parse_iso_date(body.valid_to, "valid_to") if body.valid_to is not None else sub.valid_to
+    await _validate_version_window(db, sub.scheme_master_id, new_valid_from, new_valid_to, exclude_submission_id=sub.id)
+
     old_snapshot = {field: getattr(ov, field) for field in requested_updates.keys()}
-    changes = _deep_field_diff(old_snapshot, requested_updates)
+    old_snapshot["valid_from"] = sub.valid_from.isoformat() if sub.valid_from else None
+    old_snapshot["valid_to"] = sub.valid_to.isoformat() if sub.valid_to else None
+    new_snapshot = dict(requested_updates)
+    new_snapshot["valid_from"] = new_valid_from.isoformat() if new_valid_from else None
+    new_snapshot["valid_to"] = new_valid_to.isoformat() if new_valid_to else None
+    changes = _deep_field_diff(old_snapshot, new_snapshot)
 
     for field, value in requested_updates.items():
         setattr(ov, field, value)
+    sub.valid_from = new_valid_from
+    sub.valid_to = new_valid_to
+
+    if sub.master:
+        if "agency" in requested_updates and requested_updates["agency"] is not None:
+            sub.master.agency = requested_updates["agency"]
+        if "scheme_name" in requested_updates and requested_updates["scheme_name"] is not None:
+            sub.master.scheme_name = requested_updates["scheme_name"]
+        if "scheme_code" in requested_updates:
+            sub.master.scheme_code = requested_updates["scheme_code"]
 
     if changes:
         db.add(ChangeLog(submission_id=sub.id, changed_by=user.id, tab_name="overview", changes=changes))
@@ -347,6 +510,129 @@ async def update_tab(scheme_id: str, tab_name: str, body: TabUpdate, db: AsyncSe
     sub.updated_at = datetime.utcnow()
     await db.commit()
     return {"ok": True, "tab": tab_name, "changes": len(changes)}
+
+
+@router.get("/{scheme_id}/versions")
+async def list_versions(scheme_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    sub = await _get_submission(db, scheme_id)
+    await _ensure_master_for_submission(db, sub, user)
+    _assert_agency_access(user, sub)
+
+    res = await db.execute(
+        select(SchemeSubmission)
+        .options(selectinload(SchemeSubmission.master), selectinload(SchemeSubmission.overview))
+        .where(SchemeSubmission.scheme_master_id == sub.scheme_master_id)
+        .order_by(SchemeSubmission.version.asc())
+    )
+    versions = res.scalars().all()
+    return [
+        {
+            "id": v.id,
+            "version": v.version,
+            "version_label": f"v{v.version}",
+            "status": _effective_status(v),
+            "valid_from": v.valid_from.isoformat() if v.valid_from else None,
+            "valid_to": v.valid_to.isoformat() if v.valid_to else None,
+        }
+        for v in versions
+    ]
+
+
+@router.post("/{scheme_id}/clone-version", status_code=201)
+async def clone_version(scheme_id: str, body: CloneVersionBody, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    _require_role(user, "agency_creator", "mto_admin")
+    source = await _get_submission(db, scheme_id)
+    await _ensure_master_for_submission(db, source, user)
+    _assert_agency_access(user, source)
+
+    vf = _parse_iso_date(body.valid_from, "valid_from")
+    vt = _parse_iso_date(body.valid_to, "valid_to")
+    await _validate_version_window(db, source.scheme_master_id, vf, vt)
+
+    vers_res = await db.execute(select(SchemeSubmission).where(SchemeSubmission.scheme_master_id == source.scheme_master_id))
+    existing = vers_res.scalars().all()
+    next_version = max([x.version for x in existing], default=0) + 1
+
+    src_ov = source.overview
+    overview = SchemeOverview(
+        agency=src_ov.agency if src_ov else (source.master.agency if source.master else user.agency),
+        scheme_name=src_ov.scheme_name if src_ov else (source.master.scheme_name if source.master else ""),
+        scheme_code=src_ov.scheme_code if src_ov else (source.master.scheme_code if source.master else None),
+        legislated_or_consent=src_ov.legislated_or_consent if src_ov else None,
+        consent_scope=src_ov.consent_scope if src_ov else None,
+        background_info=(dict(src_ov.background_info) if src_ov and src_ov.background_info else None),
+    )
+    db.add(overview)
+    await db.flush()
+
+    clone = SchemeSubmission(
+        scheme_master_id=source.scheme_master_id,
+        scheme_overview_id=overview.id,
+        status=SubmissionStatus.draft.value,
+        version=next_version,
+        valid_from=vf,
+        valid_to=vt,
+        cloned_from_submission_id=source.id,
+        created_by=user.id,
+    )
+    db.add(clone)
+    await db.flush()
+
+    def clone_tab(existing_obj, model_cls):
+        if not existing_obj:
+            return
+        copied = dict(existing_obj.data) if existing_obj.data else {}
+        db.add(model_cls(submission_id=clone.id, data=copied))
+
+    clone_tab(source.mt_parameters, SchemeMTParameters)
+    clone_tab(source.transactions, TransactionDetails)
+    clone_tab(source.homes_functions, HOMESFunctions)
+    clone_tab(source.mt_bands, MTBands)
+    clone_tab(source.api_interfaces, APIBatchInterfaces)
+
+    db.add(Comment(submission_id=clone.id, user_id=user.id, text=f"Cloned from v{source.version}", stage="cloned"))
+    await db.commit()
+    return {"id": clone.id, "version": clone.version, "version_label": f"v{clone.version}", "status": clone.status}
+
+
+@router.post("/{scheme_id}/activate")
+async def activate_version(scheme_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    _require_role(user, "mto_admin")
+    sub = await _get_submission(db, scheme_id)
+    await _ensure_master_for_submission(db, sub, user)
+    if sub.status != SubmissionStatus.approved.value:
+        raise HTTPException(status_code=400, detail=f"Only approved versions can be activated (current: {sub.status})")
+    await _validate_version_window(db, sub.scheme_master_id, sub.valid_from, sub.valid_to, exclude_submission_id=sub.id)
+
+    res = await db.execute(select(SchemeSubmission).where(SchemeSubmission.scheme_master_id == sub.scheme_master_id))
+    versions = res.scalars().all()
+    for v in versions:
+        if v.id == sub.id:
+            continue
+        if _effective_status(v) == SubmissionStatus.active.value:
+            v.status = SubmissionStatus.expired.value
+
+    sub.status = SubmissionStatus.active.value
+    sub.updated_at = datetime.utcnow()
+    db.add(Comment(submission_id=sub.id, user_id=user.id, text="Version activated", stage="active"))
+    await db.commit()
+    return {"ok": True, "status": sub.status}
+
+
+@router.post("/{scheme_id}/retire")
+async def retire_version(scheme_id: str, body: RetireBody = RetireBody(), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    _require_role(user, "mto_admin")
+    sub = await _get_submission(db, scheme_id)
+    if _effective_status(sub) != SubmissionStatus.active.value:
+        raise HTTPException(status_code=400, detail="Only active versions can be retired")
+
+    retire_date = _parse_iso_date(body.retire_date, "retire_date") if body.retire_date else date.today()
+    sub.valid_to = retire_date
+    sub.status = SubmissionStatus.retired.value
+    sub.updated_at = datetime.utcnow()
+    db.add(Comment(submission_id=sub.id, user_id=user.id, text=(body.comment or "Version retired by MTO"), stage="retired"))
+    await db.commit()
+    return {"ok": True, "status": sub.status, "valid_to": sub.valid_to.isoformat() if sub.valid_to else None}
 
 
 # ── Workflow ─────────────────────────────────────────────────────
@@ -538,10 +824,19 @@ async def delete_scheme(scheme_id: str, db: AsyncSession = Depends(get_db), user
     _require_role(user, "mto_admin")
     sub = await _get_submission(db, scheme_id)
     overview = sub.overview
+    master_id = sub.scheme_master_id
 
     await db.delete(sub)
     if overview:
         await db.delete(overview)
+
+    if master_id:
+        cnt_res = await db.execute(select(SchemeSubmission).where(SchemeSubmission.scheme_master_id == master_id, SchemeSubmission.id != scheme_id))
+        remaining = cnt_res.scalars().first()
+        if not remaining:
+            master = await db.get(SchemeMaster, master_id)
+            if master:
+                await db.delete(master)
     await db.commit()
     return {"ok": True, "deleted_scheme_id": scheme_id}
 

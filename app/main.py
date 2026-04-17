@@ -22,11 +22,39 @@ async def lifespan(app: FastAPI):
         def migrate_tables():
             import sqlite3
             try:
-                db_path = "db.sqlite3"
+                db_path = "homes_onboarding.db"
                 sqlite_conn = sqlite3.connect(db_path)
                 cursor = sqlite_conn.cursor()
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS scheme_master (
+                        id TEXT PRIMARY KEY,
+                        agency TEXT NOT NULL,
+                        scheme_name TEXT NOT NULL,
+                        scheme_code TEXT,
+                        created_by TEXT,
+                        created_at DATETIME
+                    )
+                    """
+                )
                 try:
                     cursor.execute("ALTER TABLE scheme_overview ADD COLUMN is_active BOOLEAN DEFAULT 1")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE scheme_submissions ADD COLUMN scheme_master_id TEXT")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE scheme_submissions ADD COLUMN valid_from DATE")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE scheme_submissions ADD COLUMN valid_to DATE")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE scheme_submissions ADD COLUMN cloned_from_submission_id TEXT")
                 except sqlite3.OperationalError:
                     pass
                 sqlite_conn.commit()

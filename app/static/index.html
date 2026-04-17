@@ -537,6 +537,9 @@ function statusBadge(st){
     pending_review:['Pending Review','bg-blue-50 text-blue-700 border-blue-200'],
     pending_final:['Pending Final','bg-indigo-50 text-indigo-700 border-indigo-200'],
     approved:['Approved','bg-emerald-50 text-emerald-700 border-emerald-200'],
+    active:['Active','bg-teal-50 text-teal-700 border-teal-200'],
+    expired:['Expired','bg-slate-100 text-slate-700 border-slate-200'],
+    retired:['Retired','bg-rose-50 text-rose-700 border-rose-200'],
     rejected:['Rejected','bg-red-50 text-red-700 border-red-200']};
   const[label,cls]=m[st]||[st,'bg-gray-100 text-gray-600 border-gray-200'];
   return `<span class="px-2.5 py-1 rounded-full text-xs font-medium border ${cls}">${label}</span>`;
@@ -586,7 +589,7 @@ function renderListPage(){
     </div>
     <div id="schedulePanel" class="mb-6"></div>
     <div class="flex gap-2 mb-4" id="filterBar">
-      ${['all','draft','pending_review','pending_final','approved','rejected'].map(f=>
+      ${['all','draft','pending_review','pending_final','approved','active','expired','retired','rejected'].map(f=>
         `<button onclick="S.statusFilter='${f}';filterSchemes()" class="px-3 py-1.5 rounded-lg text-xs font-medium transition ${S.statusFilter===f?'bg-brand-600 text-white':'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}">${f==='all'?'All':f.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</button>`
       ).join('')}
     </div>
@@ -607,7 +610,7 @@ async function loadSchemes(){
 
 function filterSchemes(){
   document.querySelectorAll('#filterBar button').forEach((b,i)=>{
-    const f=['all','draft','pending_review','pending_final','approved','rejected'][i];
+    const f=['all','draft','pending_review','pending_final','approved','active','expired','retired','rejected'][i];
     b.className=`px-3 py-1.5 rounded-lg text-xs font-medium transition ${S.statusFilter===f?'bg-brand-600 text-white':'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`;
   });
   renderSchemeTable();
@@ -649,7 +652,7 @@ function updateSchemeKpis(items){
   const all=items||[];
   const draft=all.filter(x=>x.status==='draft').length;
   const approval=all.filter(x=>x.status==='pending_review'||x.status==='pending_final').length;
-  const approved=all.filter(x=>x.status==='approved').length;
+  const approved=all.filter(x=>x.status==='approved'||x.status==='active').length;
   const bind=(id,val)=>{const n=document.getElementById(id);if(n)n.textContent=String(val)};
   bind('kpiTotal',all.length);
   bind('kpiDraft',draft);
@@ -853,6 +856,10 @@ async function createNewScheme(){
     ${mSelect('Agency','agency',agencyOptions,S.user?.agency||'')}
     ${mf('Full Name of Scheme/Fund','scheme_name','','text',true,'Displayed on emails, letters and HOMES eService')}
     ${mf('Scheme Code','scheme_code','','text',true,'Agency acronym followed by Scheme acronym, e.g. MOH_SchemeA')}
+    <div class="grid grid-cols-2 gap-3">
+      ${mf('Version Start Date','valid_from','','date',true)}
+      ${mf('Version End Date','valid_to','','date',true)}
+    </div>
     ${mSelect('Legislated or Consent','legislated_or_consent',['Legislated','Consent'])}
     ${mSelect('Consent Scope','consent_scope',['Agency-specific + All-scheme','Single-scheme + All-scheme','Not Applicable'])}
     ${mta('Background Info','background_info','')}
@@ -1312,6 +1319,9 @@ function renderDetailPage(){
         Scheme Workspace
       </div>
     </div>
+    <div class="px-6 pt-2 max-w-7xl mx-auto">
+      <div id="detailVersionCtx" class="text-xs text-slate-500 font-medium"></div>
+    </div>
     <div id="detailBody" class="p-6">
       <div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-brand-400 text-2xl"></i></div>
     </div>
@@ -1322,6 +1332,8 @@ function renderDetailContent(){
   const d=S.currentSchemeData;if(!d)return;
   document.getElementById('detailTitle').textContent=d.scheme_name||'Untitled Scheme';
   document.getElementById('detailBadge').innerHTML=statusBadge(d.status);
+  const ctx=document.getElementById('detailVersionCtx');
+  if(ctx)ctx.textContent=`${d.agency||'-'} | ${d.scheme_name||'Untitled'} | ${d.version_label||('v'+(d.version||1))}`;
 
   const canEdit=
     (hasRole('mto_admin')) ||
@@ -1483,6 +1495,10 @@ function renderTab0(){
     ${ff('Full Name of Scheme/Fund','scheme_name',d.scheme_name,'text','Displayed on emails, letters and HOMES eService')}
     ${ff('Scheme Code','scheme_code',d.scheme_code,'text','Agency acronym followed by Scheme acronym, e.g. MOH_SchemeA')}
     ${fsel('Legislated or Consent','legislated_or_consent',['Legislated','Consent'],d.legislated_or_consent)}
+  </div>
+  <div class="grid grid-cols-2 gap-4 mt-4">
+    ${ff('Version Start Date','valid_from',d.valid_from,'date','Start date for this scheme version')}
+    ${ff('Version End Date','valid_to',d.valid_to,'date','End date for this scheme version')}
   </div>
   <div id="consentScopeWrap" class="mt-4 ${consent?'':'hidden'}">
     ${fsel('Consent Scope','consent_scope',['Agency-specific + All-scheme','Single-scheme + All-scheme','Not Applicable'],d.consent_scope,'Applicable when Consent is selected')}
@@ -1931,6 +1947,7 @@ async function saveCurrentTab(showToast=true){
       // Overview tab saves to PUT /api/schemes/{id}
       const body={
         agency:data.agency,scheme_name:data.scheme_name,scheme_code:data.scheme_code,
+        valid_from:data.valid_from,valid_to:data.valid_to,
         legislated_or_consent:data.legislated_or_consent,consent_scope:data.consent_scope,
         background_info:{
           org_established:data.bg_org_established,purpose:data.bg_purpose,
@@ -2121,6 +2138,23 @@ function renderApprovalPanel(d,canEdit){
     <button onclick="showRejectModal()" class="w-full bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-lg text-sm font-semibold transition">
       <i class="fas fa-times mr-2"></i>Reject to Approver
     </button>`;
+  }else if(hasRole('mto_admin')&&status==='approved'){
+    actions=`
+    <button onclick="activateVersion()" class="w-full bg-teal-600 hover:bg-teal-700 text-white py-2.5 rounded-lg text-sm font-semibold transition mb-2">
+      <i class="fas fa-play mr-2"></i>Activate Version
+    </button>`;
+  }else if(hasRole('mto_admin')&&status==='active'){
+    actions=`
+    <button onclick="retireVersion()" class="w-full bg-rose-600 hover:bg-rose-700 text-white py-2.5 rounded-lg text-sm font-semibold transition mb-2">
+      <i class="fas fa-stop mr-2"></i>Retire Version Early
+    </button>`;
+  }
+
+  if((hasRole('agency_creator')||hasRole('mto_admin'))&&['approved','active','expired','retired'].includes(status)){
+    actions=(actions||'')+`
+    <button onclick="cloneVersionModal()" class="w-full mt-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2.5 rounded-lg text-sm font-semibold transition border border-indigo-200">
+      <i class="fas fa-code-branch mr-2"></i>Clone to New Draft Version
+    </button>`;
   }
 
   return `
@@ -2209,6 +2243,68 @@ function renderApprovalPanel(d,canEdit){
       </div>
     </div>
   </div>`;
+}
+
+async function activateVersion(){
+  try{
+    await api(`/api/schemes/${S.currentScheme}/activate`,{method:'POST'});
+    toast('Version activated');
+    await loadSchemeDetail();
+    if(S.view==='list')await loadSchemes();
+  }catch(e){toast(e.message,'error')}
+}
+
+function retireVersion(){
+  openModal('Retire Active Version',`
+    <form onsubmit="submitRetireVersion(event)" class="space-y-3">
+      <p class="text-sm text-gray-600">Retire this active version early. Optional: set retirement date.</p>
+      ${mf('Retire Date','retire_date','','date',false)}
+      ${mta('Reason / Comment','comment','')}
+      <button type="submit" class="w-full bg-rose-600 hover:bg-rose-700 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+        <i class="fas fa-stop mr-2"></i>Confirm Retire
+      </button>
+    </form>`);
+}
+
+async function submitRetireVersion(e){
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const body={retire_date:fd.get('retire_date')||null,comment:fd.get('comment')||null};
+  try{
+    await api(`/api/schemes/${S.currentScheme}/retire`,{method:'POST',body});
+    closeModal();
+    toast('Version retired');
+    await loadSchemeDetail();
+    if(S.view==='list')await loadSchemes();
+  }catch(e2){toast(e2.message,'error')}
+}
+
+function cloneVersionModal(){
+  openModal('Clone to New Version',`
+    <form onsubmit="submitCloneVersion(event)" class="space-y-3">
+      <p class="text-sm text-gray-600">Clone all 6 configuration tabs into a new draft version.</p>
+      <div class="grid grid-cols-2 gap-3">
+        ${mf('New Version Start Date','valid_from','','date',true)}
+        ${mf('New Version End Date','valid_to','','date',true)}
+      </div>
+      <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+        <i class="fas fa-code-branch mr-2"></i>Create Draft Version
+      </button>
+    </form>`);
+}
+
+async function submitCloneVersion(e){
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const body={valid_from:fd.get('valid_from'),valid_to:fd.get('valid_to')};
+  try{
+    const r=await api(`/api/schemes/${S.currentScheme}/clone-version`,{method:'POST',body});
+    closeModal();
+    toast(`Cloned to ${r.version_label||'new version'} draft`);
+    S.currentScheme=r.id;
+    await loadSchemeDetail();
+    if(S.view==='list')await loadSchemes();
+  }catch(e2){toast(e2.message,'error')}
 }
 
 // ── SLOT MANAGEMENT ──

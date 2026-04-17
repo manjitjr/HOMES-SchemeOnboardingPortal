@@ -60,7 +60,22 @@ class SubmissionStatus(str, enum.Enum):
     pending_review = "pending_review"
     pending_final = "pending_final"
     approved = "approved"
+    active = "active"
+    expired = "expired"
+    retired = "retired"
     rejected = "rejected"
+
+
+class SchemeMaster(Base):
+    __tablename__ = "scheme_master"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agency: Mapped[str] = mapped_column(String(255))
+    scheme_name: Mapped[str] = mapped_column(String(255))
+    scheme_code: Mapped[str | None] = mapped_column(String(100))
+    created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    versions: Mapped[list["SchemeSubmission"]] = relationship(back_populates="master")
 
 
 class User(Base):
@@ -96,13 +111,18 @@ class SchemeOverview(Base):
 class SchemeSubmission(Base):
     __tablename__ = "scheme_submissions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scheme_master_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("scheme_master.id"))
     scheme_overview_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("scheme_overview.id"))
     status: Mapped[str] = mapped_column(String(50), default=SubmissionStatus.draft.value)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    valid_from: Mapped[date | None] = mapped_column(Date)
+    valid_to: Mapped[date | None] = mapped_column(Date)
+    cloned_from_submission_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("scheme_submissions.id"))
     created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    master: Mapped["SchemeMaster | None"] = relationship(back_populates="versions")
     overview: Mapped["SchemeOverview | None"] = relationship(foreign_keys=[scheme_overview_id])
     creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])
     mt_parameters: Mapped["SchemeMTParameters | None"] = relationship(back_populates="submission", uselist=False, cascade="all, delete-orphan")
