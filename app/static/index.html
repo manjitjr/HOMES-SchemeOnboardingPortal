@@ -1772,6 +1772,29 @@ function sectionHead(title,icon){
   </div>`;
 }
 
+const MTC_MEMBER_STATUSES=['Overseas Studying','Overseas Working','Nursing Home','Incarcerated','Incarcerated Overseas','Deceased','Relocated Overseas','No longer in contact','Missing','Estranged'];
+const MTC_SECTION_KEYS=['related','nuclear','parent_guardian','immediate_family','freeform'];
+
+function statusFieldKey(status){
+  return String(status||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
+}
+
+function getMtcSectionData(tabData,key){
+  const nested=(tabData&&typeof tabData[key]==='object')?tabData[key]:{};
+  const inclusion={...(nested.inclusion||{})};
+  MTC_MEMBER_STATUSES.forEach(ms=>{
+    const flatVal=tabData?.[`${key}_inclusion_${statusFieldKey(ms)}`];
+    if(flatVal)inclusion[ms]=flatVal;
+    if(!inclusion[ms])inclusion[ms]='Included';
+  });
+  return {
+    used:nested.used??tabData?.[`${key}_used`]??'',
+    construct:nested.construct??tabData?.[`${key}_construct`]??'',
+    deviation:nested.deviation??tabData?.[`${key}_deviation`]??'',
+    inclusion,
+  };
+}
+
 function getTabData(tabName){
   const d=S.currentSchemeData;
   if(!d)return {};
@@ -1820,11 +1843,10 @@ function renderTab0(){
 // ── TAB 1: MT PARAMETERS ──
 function renderTab1(){
   const d=getTabData('mt_parameters');
-  const memberStatuses=['Overseas Studying','Overseas Working','Nursing Home','Incarcerated','Incarcerated Overseas','Deceased','Relocated Overseas','No longer in contact','Missing','Estranged'];
   const mtcTypes=['Related','Nuclear','Parent-Guardian','Immediate Family','Free-form'];
 
   function mtcSection(name,key){
-    const sec=d[key]||{};
+    const sec=getMtcSectionData(d,key);
     return `
     <div class="border border-gray-200 rounded-lg mb-3">
       <button type="button" onclick="toggleCollapsible(this)" class="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition rounded-lg">
@@ -1842,9 +1864,14 @@ function renderTab1(){
             <table class="w-full text-xs">
               <thead><tr class="bg-surface-50"><th class="px-3 py-2 text-left">Status</th><th class="px-3 py-2 text-left">Inclusion</th></tr></thead>
               <tbody class="divide-y divide-gray-100">
-                ${memberStatuses.map(ms=>`<tr>
+                ${MTC_MEMBER_STATUSES.map(ms=>`<tr>
                   <td class="px-3 py-1.5 text-gray-600">${ms}</td>
-                  <td class="px-3 py-1.5"><span class="text-xs text-gray-400 italic">Standardised</span></td>
+                  <td class="px-3 py-1.5">
+                    <select data-field="${key}_inclusion_${statusFieldKey(ms)}" ${ro()} class="w-full max-w-[170px] border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
+                      <option value="Included" ${sec.inclusion[ms]==='Excluded'?'':'selected'}>Included</option>
+                      <option value="Excluded" ${sec.inclusion[ms]==='Excluded'?'selected':''}>Excluded</option>
+                    </select>
+                  </td>
                 </tr>`).join('')}
               </tbody>
             </table>
@@ -1867,7 +1894,7 @@ function renderTab1(){
   </div>
 
   ${sectionHead('MTC Types','fa-sitemap')}
-  ${mtcTypes.map((t,i)=>mtcSection(t,['related','nuclear','parent_guardian','immediate_family','freeform'][i])).join('')}
+  ${mtcTypes.map((t,i)=>mtcSection(t,MTC_SECTION_KEYS[i])).join('')}
 
   ${sectionHead('Income Components','fa-dollar-sign')}
   <div class="grid grid-cols-2 gap-4 mb-4">
@@ -2394,6 +2421,21 @@ function collectTabData(){
       rankings.push(r);
     });
     data.rankings=rankings;
+  }
+  if(S.activeTab===1){
+    MTC_SECTION_KEYS.forEach(key=>{
+      const inclusion={};
+      MTC_MEMBER_STATUSES.forEach(ms=>{
+        const includeKey=`${key}_inclusion_${statusFieldKey(ms)}`;
+        inclusion[ms]=data[includeKey]||'Included';
+      });
+      data[key]={
+        used:data[`${key}_used`]||'',
+        construct:data[`${key}_construct`]||'',
+        deviation:data[`${key}_deviation`]||'',
+        inclusion,
+      };
+    });
   }
   return data;
 }
