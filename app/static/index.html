@@ -250,7 +250,7 @@ let S={
   token:localStorage.getItem('homes_token')||null,
   user:parseStoredUser(),
   sessionStartedAt:localStorage.getItem('homes_session_started_at')||null,
-  view:'list', // list, detail, users, field_management
+  view:'list', // list, detail, scheduling, users, field_management, notifications
   schemes:[],
   currentScheme:null,
   currentSchemeData:null,
@@ -261,6 +261,7 @@ let S={
   statusFilter:'all',
   tabData:{},
   allUsers:[],
+  notificationLogs:[],
   agencies:[],
   userAgencyFilter:'all',
   userAgencySearch:'',
@@ -443,6 +444,7 @@ async function render(){
     else if(S.view==='scheduling'){app.innerHTML=renderSchedulingPage()}
     else if(S.view==='users'){await ensureAgenciesLoaded();app.innerHTML=renderUsersPage();loadUsers()}
     else if(S.view==='field_management'){app.innerHTML=renderFieldManagementPage()}
+    else if(S.view==='notifications'){app.innerHTML=renderNotificationsPage();loadNotificationLogs()}
   }catch(e){
     console.error('Render error:', e);
     document.getElementById('app').innerHTML=`<div style="padding:20px;color:red;font-family:monospace"><strong>Error:</strong> ${e.message}</div>`;
@@ -632,6 +634,9 @@ function renderHeader(){
         ${isAdmin()?`
         <button onclick="S.view='users';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='users'?'bg-white text-brand-800':'text-white/80 hover:bg-white/15'}">
           <i class="fas fa-users-cog mr-1"></i>User Management
+        </button>
+        <button onclick="S.view='notifications';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='notifications'?'bg-white text-brand-800':'text-white/80 hover:bg-white/15'}">
+          <i class="fas fa-envelope-open-text mr-1"></i>Notification Log
         </button>
         <button onclick="S.view='field_management';render();loadFieldGuidance()" class="px-3 py-1.5 rounded-lg text-xs font-medium ${S.view==='field_management'?'bg-white text-brand-800':'text-white/80 hover:bg-white/15'}">
           <i class="fas fa-book mr-1"></i>Field Guidance
@@ -1241,6 +1246,87 @@ async function loadUsers(){
   }catch(e){document.getElementById('usersTable').innerHTML=`<div class="px-5 py-8 text-center text-red-500 text-sm">${e.message}</div>`}
 }
 
+// ════════════════════════════════════════
+// NOTIFICATION LOG PAGE
+// ════════════════════════════════════════
+function renderNotificationsPage(){
+  return renderHeader()+`
+  <div class="p-6 max-w-6xl mx-auto fade-in">
+    <div class="rounded-2xl mb-6 p-6 text-white relative overflow-hidden" style="background:linear-gradient(135deg,#0f2440 0%,#1e3a5f 55%,#2563eb 100%)">
+      <div class="absolute -top-10 -right-8 w-40 h-40 rounded-full bg-white/10 blur-2xl"></div>
+      <div class="relative">
+        <h2 class="text-2xl font-bold">Notification Log</h2>
+        <p class="text-sm text-white/80 mt-1">Audit trail of workflow notification emails sent to approvers.</p>
+      </div>
+    </div>
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h2 class="text-xl font-bold text-brand-900">Email Delivery Events</h2>
+        <p class="text-sm text-slate-500 mt-0.5">Latest pending-review and pending-final notifications</p>
+      </div>
+      <button onclick="loadNotificationLogs()" class="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold transition">
+        <i class="fas fa-rotate mr-1"></i>Refresh
+      </button>
+    </div>
+
+    <div id="notificationLogTable" class="modern-card rounded-xl overflow-hidden">
+      <div class="px-5 py-8 text-center text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading notifications...</div>
+    </div>
+  </div>`;
+}
+
+async function loadNotificationLogs(){
+  try{
+    S.notificationLogs=await api('/api/schemes/notification-logs?limit=300');
+    renderNotificationLogsTable();
+  }catch(e){
+    const el=document.getElementById('notificationLogTable');
+    if(el)el.innerHTML=`<div class="px-5 py-8 text-center text-red-500 text-sm">${esc(e.message)}</div>`;
+  }
+}
+
+function renderNotificationLogsTable(){
+  const el=document.getElementById('notificationLogTable');
+  if(!el)return;
+  const logs=S.notificationLogs||[];
+  if(!logs.length){
+    el.innerHTML='<div class="px-5 py-8 text-center text-gray-400 text-sm">No notification events found</div>';
+    return;
+  }
+  const badge=(s)=>{
+    const m={sent:'bg-emerald-50 text-emerald-700 border-emerald-200',skipped:'bg-amber-50 text-amber-700 border-amber-200',failed:'bg-red-50 text-red-700 border-red-200'};
+    return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold border ${m[s]||'bg-gray-100 text-gray-600 border-gray-200'}">${esc((s||'').toUpperCase()||'UNKNOWN')}</span>`;
+  };
+
+  el.innerHTML=`
+  <table class="w-full text-sm">
+    <thead><tr class="bg-surface-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+      <th class="px-4 py-3">Time</th>
+      <th class="px-4 py-3">Scheme</th>
+      <th class="px-4 py-3">Stage</th>
+      <th class="px-4 py-3">Status</th>
+      <th class="px-4 py-3">Recipients</th>
+      <th class="px-4 py-3">Triggered By</th>
+      <th class="px-4 py-3">Detail</th>
+    </tr></thead>
+    <tbody class="divide-y divide-gray-50">
+      ${logs.map(l=>`
+      <tr class="hover:bg-slate-50 transition">
+        <td class="px-4 py-3 text-xs text-slate-600 whitespace-nowrap">${l.created_at?fmtDateTime(l.created_at):'-'}</td>
+        <td class="px-4 py-3">
+          <div class="font-medium text-gray-800">${esc(l.scheme_name||'-')}</div>
+          <div class="text-[11px] text-gray-500">${esc(l.agency||'-')} ${l.submission_id?`• ${esc(l.submission_id)}`:''}</div>
+        </td>
+        <td class="px-4 py-3 text-xs text-slate-600">${esc((l.stage||'').replace(/_/g,' '))||'-'}</td>
+        <td class="px-4 py-3">${badge(l.delivery_status)}</td>
+        <td class="px-4 py-3 text-xs text-slate-600 max-w-[260px] break-all">${Array.isArray(l.recipients)&&l.recipients.length?esc(l.recipients.join(', ')):'-'}</td>
+        <td class="px-4 py-3 text-xs text-slate-600">${esc(l.triggered_by||'-')}</td>
+        <td class="px-4 py-3 text-xs text-slate-600 max-w-[220px] break-all">${esc(l.detail||'-')}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
 function renderUsersTable(){
   const el=document.getElementById('usersTable');
   const search=(S.userAgencySearch||'').trim().toLowerCase();
@@ -1279,7 +1365,7 @@ function renderUsersTable(){
   <div class="users-table-wrap">
     <table class="w-full text-sm">
       <thead><tr class="bg-surface-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-        <th class="px-5 py-3">User</th><th class="px-5 py-3">Username</th><th class="px-5 py-3">Agency</th>
+        <th class="px-5 py-3">User</th><th class="px-5 py-3">Username</th><th class="px-5 py-3">Email</th><th class="px-5 py-3">Agency</th>
         <th class="px-5 py-3">Roles</th><th class="px-5 py-3">Status</th><th class="px-5 py-3">Last Login</th><th class="px-5 py-3">Last Logout</th><th class="px-5 py-3 text-right">Actions</th>
       </tr></thead>
       <tbody class="divide-y divide-gray-50">
@@ -1294,6 +1380,7 @@ function renderUsersTable(){
             </div>
           </td>
           <td class="px-5 py-3 text-gray-500 font-mono text-xs">${esc(u.username)}</td>
+          <td class="px-5 py-3 text-gray-500 font-mono text-xs">${esc(u.email||'-')}</td>
           <td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700">${esc(u.agency||'-')}</span></td>
           <td class="px-5 py-3"><div class="flex flex-wrap gap-1">${(u.roles||[]).map(roleBadge).join('')}</div></td>
           <td class="px-5 py-3">${u.is_active?'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">Active</span>':'<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700">Inactive</span>'}</td>
@@ -1318,6 +1405,7 @@ async function showCreateUserModal(){
   openModal('Create User',`
   <form onsubmit="createUser(event)" class="space-y-4">
     ${mf('Username','username','','text',true)}
+    ${mf('Email','email','','email',false)}
     ${mf('Password','password','','password',true)}
     ${mf('Display Name','display_name','','text',true)}
     <div>
@@ -1346,7 +1434,7 @@ async function createUser(e){
   e.preventDefault();
   const fd=new FormData(e.target);
   const roles=[...fd.getAll('roles')];
-  const body={username:fd.get('username'),password:fd.get('password'),display_name:fd.get('display_name'),agency:fd.get('agency')||null,roles};
+  const body={username:fd.get('username'),email:fd.get('email')||null,password:fd.get('password'),display_name:fd.get('display_name'),agency:fd.get('agency')||null,roles};
   try{
     await api('/api/auth/users',{method:'POST',body});
     toast('User created');closeModal();loadUsers();
@@ -1361,6 +1449,7 @@ async function showEditUserModal(userId){
   openModal('Edit User: '+u.display_name,`
   <form onsubmit="updateUser(event,'${u.id}')" class="space-y-4">
     ${mf('Display Name','display_name',u.display_name,'text',true)}
+    ${mf('Email','email',u.email||'','email',false)}
     <div>
       <label class="block text-xs font-medium text-gray-600 mb-1">Agency</label>
       <select name="agency" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white transition">
@@ -1391,7 +1480,7 @@ async function updateUser(e,userId){
   e.preventDefault();
   const fd=new FormData(e.target);
   const roles=[...fd.getAll('roles')];
-  const body={display_name:fd.get('display_name'),agency:fd.get('agency')||null,roles,is_active:!!fd.get('is_active')};
+  const body={display_name:fd.get('display_name'),email:fd.get('email')||null,agency:fd.get('agency')||null,roles,is_active:!!fd.get('is_active')};
   const pw=fd.get('password');if(pw)body.password=pw;
   try{
     await api(`/api/auth/users/${userId}`,{method:'PUT',body});
@@ -2657,7 +2746,7 @@ function renderApprovalPanel(d,canEdit){
 
   let actions='';
   if(hasRole('agency_creator')&&(status==='draft'||status==='rejected')){
-    actions=`<button onclick="submitScheme()" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+    actions=`<button onclick="confirmWorkflowAction('submit')" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-semibold transition">
       <i class="fas fa-paper-plane mr-2"></i>Submit for Review
     </button>
     <button onclick="saveDraftOnly()" class="w-full mt-2 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 rounded-lg text-sm font-semibold transition">
@@ -2666,7 +2755,7 @@ function renderApprovalPanel(d,canEdit){
     <p class="text-[11px] text-gray-500 mt-2">Draft mode is supported. Save and return later anytime.</p>`;
   }else if(hasRole('agency_approver')&&(status==='pending_review'||status==='rejected')){
     actions=`
-    <button onclick="approveScheme()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-semibold transition mb-2">
+    <button onclick="confirmWorkflowAction('approve')" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-semibold transition mb-2">
       <i class="fas fa-check mr-2"></i>Approve & Send to MTO
     </button>
     ${status==='pending_review'?`<button onclick="showRejectModal()" class="w-full bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-lg text-sm font-semibold transition">
@@ -2674,7 +2763,7 @@ function renderApprovalPanel(d,canEdit){
     </button>`:''}`;
   }else if(hasRole('mto_admin')&&status==='pending_final'){
     actions=`
-    <button onclick="finalApproveScheme()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-semibold transition mb-2">
+    <button onclick="confirmWorkflowAction('final_approve')" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-semibold transition mb-2">
       <i class="fas fa-check-double mr-2"></i>Final Approve
     </button>
     <button onclick="showRejectModal()" class="w-full bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-lg text-sm font-semibold transition">
@@ -2913,6 +3002,54 @@ async function doRejectSlot(){
 }
 
 // ── APPROVAL ACTIONS ──
+function workflowChangeRows(limit=20){
+  const all=(S.changes||[])
+    .flatMap(c=>normalizeChangeRows(c.changes||[]).map(row=>({
+      tab:c.tab_name||'unknown',
+      field:displayFieldName(row.field,c.tab_name||''),
+      old:fmtChangeValue(row.old),
+      next:fmtChangeValue(row.new),
+      timestamp:c.timestamp||''
+    })))
+    .filter(r=>r.old!==r.next);
+  return all.slice(0,limit);
+}
+
+function confirmWorkflowAction(action){
+  const map={
+    submit:{title:'Confirm Submit for Review',desc:'You are about to move this scheme to Pending Review for agency approvers.',cta:'Confirm Submit',run:'submitScheme'},
+    approve:{title:'Confirm Approve & Send to MTO',desc:'You are about to move this scheme to Pending Final for MTO Admin approval.',cta:'Confirm Approve',run:'approveScheme'},
+    final_approve:{title:'Confirm Final Approval',desc:'You are about to mark this scheme as Approved.',cta:'Confirm Final Approval',run:'finalApproveScheme'}
+  };
+  const cfg=map[action];
+  if(!cfg)return;
+  const rows=workflowChangeRows(25);
+  const details=rows.length?`
+    <div class="border border-gray-200 rounded-lg overflow-hidden">
+      <div class="px-3 py-2 bg-slate-50 text-xs text-slate-600 font-semibold">Recent Saved Changes (${rows.length})</div>
+      <div class="max-h-56 overflow-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-white border-b border-gray-100"><th class="px-2 py-1.5 text-left">Screen</th><th class="px-2 py-1.5 text-left">Field</th><th class="px-2 py-1.5 text-left">Previous</th><th class="px-2 py-1.5 text-left">Changed To</th></tr></thead>
+          <tbody>
+            ${rows.map(r=>`<tr class="border-b border-gray-50"><td class="px-2 py-1.5 text-slate-600">${esc(r.tab)}</td><td class="px-2 py-1.5 text-slate-700">${esc(r.field)}</td><td class="px-2 py-1.5 text-slate-500">${r.old}</td><td class="px-2 py-1.5 text-slate-700">${r.next}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `:`<div class="rounded-lg border border-amber-200 bg-amber-50 text-amber-700 text-xs px-3 py-2">No saved changes found in the audit log yet. Save tabs first if needed.</div>`;
+
+  openModal(cfg.title,`
+    <div class="space-y-4">
+      <p class="text-sm text-gray-600">${cfg.desc}</p>
+      ${details}
+      <div class="rounded-lg border border-gray-200 bg-gray-50 text-xs text-gray-600 px-3 py-2">This summary reflects saved changes from the audit log.</div>
+      <div class="flex gap-2">
+        <button type="button" onclick="closeModal()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 rounded-lg text-sm font-semibold transition">Cancel</button>
+        <button type="button" onclick="closeModal();${cfg.run}()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-semibold transition">${cfg.cta}</button>
+      </div>
+    </div>`);
+}
+
 async function submitScheme(){
   try{
     await api(`/api/schemes/${S.currentScheme}/submit`,{method:'POST'});

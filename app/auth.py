@@ -22,6 +22,7 @@ class LoginRequest(BaseModel):
 
 class UserCreate(BaseModel):
     username: str
+    email: str | None = None
     password: str
     display_name: str
     agency: str
@@ -29,6 +30,7 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     display_name: str | None = None
+    email: str | None = None
     agency: str | None = None
     roles: list[str] | None = None
     is_active: bool | None = None
@@ -39,6 +41,7 @@ def _user_dict(u: User) -> dict:
     return {
         "id": u.id,
         "username": u.username,
+        "email": u.email,
         "roles": u.roles or [],
         "agency": u.agency,
         "display_name": u.display_name,
@@ -65,6 +68,22 @@ def _validate_agency(agency: str | None, required: bool = False):
         raise HTTPException(status_code=400, detail="Agency is required")
     if agency and agency not in VALID_AGENCY_CODES:
         raise HTTPException(status_code=400, detail="Invalid agency code")
+
+
+def _normalize_email(email: str | None) -> str | None:
+    if email is None:
+        return None
+    val = str(email).strip().lower()
+    if not val:
+        return None
+    if "@" not in val or val.startswith("@") or val.endswith("@"):
+        raise HTTPException(status_code=400, detail="Email must be a valid address")
+    return val
+
+
+def _validate_required_email_for_approval_roles(roles: list[str], email: str | None):
+    if any(r in ("agency_approver", "mto_admin") for r in (roles or [])) and not email:
+        raise HTTPException(status_code=400, detail="Email is required for approver/admin roles")
 
 
 def create_token(user: User) -> str:
@@ -157,12 +176,18 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db), user
         raise HTTPException(400, "mto_admin is a reserved system account")
     _validate_roles(body.roles)
     _validate_agency(body.agency, required=True)
+    normalized_email = _normalize_email(body.email)
+    _validate_required_email_for_approval_roles(body.roles, normalized_email)
     exists = await db.execute(select(User).where(User.username == body.username))
     if exists.scalar_one_or_none():
         raise HTTPException(400, "Username already exists")
+    if normalized_email:
+        email_exists = await db.execute(select(User).where(User.email == normalized_email))
+        if email_exists.scalar_one_or_none():
+            raise HTTPException(400, "Email already exists")
     new_user = User(
         username=body.username, password_hash=body.password, display_name=body.display_name,
-        agency=body.agency, roles=body.roles, is_active=True,
+        agency=body.agency, roles=body.roles, is_active=True, email=normalized_email,
     )
     db.add(new_user)
     await db.commit()
@@ -183,6 +208,13 @@ async def update_user(user_id: str, body: UserUpdate, db: AsyncSession = Depends
             raise HTTPException(400, "mto_admin role cannot be removed")
     if body.display_name is not None:
         target.display_name = body.display_name
+    if body.email is not None:
+        normalized_email = _normalize_email(body.email)
+        if normalized_email:
+            email_exists = await db.execute(select(User).where(User.email == normalized_email, User.id != target.id))
+            if email_exists.scalar_one_or_none():
+                raise HTTPException(400, "Email already exists")
+        target.email = normalized_email
     if body.agency is not None:
         _validate_agency(body.agency)
         target.agency = body.agency
@@ -193,6 +225,7 @@ async def update_user(user_id: str, body: UserUpdate, db: AsyncSession = Depends
         target.is_active = body.is_active
     if body.password is not None:
         target.password_hash = body.password
+    _validate_required_email_for_approval_roles(target.roles or [], target.email)
     await db.commit()
     return _user_dict(target)
 
@@ -200,12 +233,12 @@ async def update_user(user_id: str, body: UserUpdate, db: AsyncSession = Depends
 # ── Seed Demo Users ──
 
 DEMO_USERS = [
-    {"username": "moh_creator", "password_hash": "password", "roles": ["agency_creator"], "agency": "MOH", "display_name": "MOH Creator"},
-    {"username": "moh_approver", "password_hash": "password", "roles": ["agency_approver"], "agency": "MOH", "display_name": "MOH Approver"},
-    {"username": "mse_creator", "password_hash": "password", "roles": ["agency_creator"], "agency": "MSE", "display_name": "MSE Creator"},
-    {"username": "mse_approver", "password_hash": "password", "roles": ["agency_approver"], "agency": "MSE", "display_name": "MSE Approver"},
-    {"username": "moe_user", "password_hash": "password", "roles": ["agency_creator", "agency_approver"], "agency": "MOE", "display_name": "MOE User"},
-    {"username": "mto_admin", "password_hash": "password", "roles": ["mto_admin"], "agency": "MTO", "display_name": "MTO Admin"},
+    {"username": "moh_creator", "email": "moh_creator@homes.local", "password_hash": "password", "roles": ["agency_creator"], "agency": "MOH", "display_name": "MOH Creator"},
+    {"username": "moh_approver", "email": "moh_approver@homes.local", "password_hash": "password", "roles": ["agency_approver"], "agency": "MOH", "display_name": "MOH Approver"},
+    {"username": "mse_creator", "email": "mse_creator@homes.local", "password_hash": "password", "roles": ["agency_creator"], "agency": "MSE", "display_name": "MSE Creator"},
+    {"username": "mse_approver", "email": "mse_approver@homes.local", "password_hash": "password", "roles": ["agency_approver"], "agency": "MSE", "display_name": "MSE Approver"},
+    {"username": "moe_user", "email": "moe_user@homes.local", "password_hash": "password", "roles": ["agency_creator", "agency_approver"], "agency": "MOE", "display_name": "MOE User"},
+    {"username": "mto_admin", "email": "mto_admin@homes.local", "password_hash": "password", "roles": ["mto_admin"], "agency": "MTO", "display_name": "MTO Admin"},
 ]
 
 
@@ -217,6 +250,7 @@ async def seed_demo_users(db: AsyncSession):
             db.add(User(**u))
         else:
             existing.password_hash = u["password_hash"]
+            existing.email = u.get("email")
             existing.roles = u["roles"]
             existing.agency = u["agency"]
             existing.display_name = u["display_name"]

@@ -131,6 +131,10 @@ def run_sqlite_migrations(db_path: str = "homes_onboarding.db") -> int:
             cursor.execute("ALTER TABLE users ADD COLUMN last_logout_at DATETIME")
         except sqlite3.OperationalError:
             pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        except sqlite3.OperationalError:
+            pass
 
         cursor.execute(
             """
@@ -147,6 +151,22 @@ def run_sqlite_migrations(db_path: str = "homes_onboarding.db") -> int:
                 created_at DATETIME,
                 updated_at DATETIME,
                 UNIQUE(tab_name, field_name)
+            )
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notification_log (
+                id TEXT PRIMARY KEY,
+                submission_id TEXT,
+                stage TEXT,
+                subject TEXT NOT NULL,
+                recipients TEXT,
+                delivery_status TEXT NOT NULL,
+                detail TEXT,
+                triggered_by TEXT,
+                created_at DATETIME
             )
             """
         )

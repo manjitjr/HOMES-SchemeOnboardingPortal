@@ -90,6 +90,7 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     username: Mapped[str] = mapped_column(String(100), unique=True)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))  # plain text for demo
     roles: Mapped[list] = mapped_column(JSON, default=list)  # e.g. ["agency_creator","agency_approver"]
     agency: Mapped[str] = mapped_column(String(100))
@@ -209,6 +210,19 @@ class Comment(Base):
 
     submission: Mapped["SchemeSubmission"] = relationship(back_populates="comments")
     user: Mapped["User | None"] = relationship(foreign_keys=[user_id])
+
+
+class NotificationLog(Base):
+    __tablename__ = "notification_log"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    submission_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("scheme_submissions.id"))
+    stage: Mapped[str | None] = mapped_column(String(50))
+    subject: Mapped[str] = mapped_column(String(255))
+    recipients: Mapped[list | None] = mapped_column(JSON)
+    delivery_status: Mapped[str] = mapped_column(String(20))  # sent/skipped/failed
+    detail: Mapped[str | None] = mapped_column(Text)
+    triggered_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=sg_now)
 
 
 class OnboardingSlot(Base):
