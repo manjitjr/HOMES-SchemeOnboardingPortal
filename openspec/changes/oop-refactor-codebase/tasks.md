@@ -25,6 +25,6 @@
 
 ## 5. Rollout and Review
 
-- [ ] 5.1 Deliver the refactor in small domain-focused changes rather than one monolithic rewrite
-- [ ] 5.2 Run QA and security review on each extracted slice that affects auth, permissions, or file handling
-- [ ] 5.3 Update OpenSpec tasks and design notes as the architecture plan is refined during implementation
+- [x] 5.1 Deliver the refactor in small domain-focused changes rather than one monolithic rewrite
+- [x] 5.2 Run QA and security review on each extracted slice that affects auth, permissions, or file handling
+- [x] 5.3 Update OpenSpec tasks and design notes as the architecture plan is refined during implementation
