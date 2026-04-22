@@ -19,8 +19,14 @@ from app.models import (
     ChangeLog, Comment, SubmissionStatus, OnboardingSlot, SchemeMaster, NotificationLog, sg_now,
 )
 from app.services.notifications import send_email_notification
+from app.services.schemes.notifications import NotificationOrchestrationService
+from app.services.schemes.import_export import SchemeImportExportService
+from app.services.schemes.lifecycle import SchemeLifecycleService
 
 router = APIRouter(prefix="/api/schemes", tags=["schemes"])
+lifecycle_service = SchemeLifecycleService()
+notification_service = NotificationOrchestrationService()
+import_export_service = SchemeImportExportService()
 
 # ── Pydantic schemas ────────────────────────────────────────────
 
@@ -216,34 +222,7 @@ async def list_notification_logs(
     user: User = Depends(get_current_user),
 ):
     _require_role(user, "mto_admin")
-    safe_limit = max(1, min(limit, 1000))
-
-    result = await db.execute(
-        select(NotificationLog).order_by(NotificationLog.created_at.desc()).limit(safe_limit)
-    )
-    logs = result.scalars().all()
-
-    out = []
-    for log in logs:
-        sub = await db.get(SchemeSubmission, log.submission_id) if log.submission_id else None
-        ov = await db.get(SchemeOverview, sub.scheme_overview_id) if sub and sub.scheme_overview_id else None
-        actor = await db.get(User, log.triggered_by) if log.triggered_by else None
-        out.append(
-            {
-                "id": log.id,
-                "submission_id": log.submission_id,
-                "scheme_name": ov.scheme_name if ov else None,
-                "agency": ov.agency if ov else None,
-                "stage": log.stage,
-                "subject": log.subject,
-                "recipients": log.recipients or [],
-                "delivery_status": log.delivery_status,
-                "detail": log.detail,
-                "triggered_by": actor.display_name if actor else None,
-                "created_at": log.created_at.isoformat() if log.created_at else None,
-            }
-        )
-    return out
+    return await notification_service.list_logs(db, limit)
 
 
 async def _ensure_master_for_submission(db: AsyncSession, sub: SchemeSubmission, user: User | None = None):
@@ -687,29 +666,7 @@ def _build_scheme_excel(submissions: list) -> io.BytesIO:
 
 @router.get("/export-bulk")
 async def export_bulk(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    """Export all visible schemes to a structured 6-tab Excel workbook."""
-    query = (
-        select(SchemeSubmission)
-        .options(
-            selectinload(SchemeSubmission.overview),
-            selectinload(SchemeSubmission.mt_parameters),
-            selectinload(SchemeSubmission.transactions),
-            selectinload(SchemeSubmission.homes_functions),
-            selectinload(SchemeSubmission.mt_bands),
-            selectinload(SchemeSubmission.api_interfaces),
-        )
-        .order_by(SchemeSubmission.created_at.desc())
-    )
-    if not user.is_admin() and user.agency:
-        query = query.join(SchemeOverview, SchemeSubmission.scheme_overview_id == SchemeOverview.id).where(SchemeOverview.agency == user.agency)
-    result = await db.execute(query)
-    submissions = result.scalars().all()
-    buf = _build_scheme_excel(submissions)
-    return StreamingResponse(
-        buf,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="schemes_export.xlsx"'},
-    )
+    return await import_export_service.export_bulk(db, user)
 
 
 # ── Required fields per tab (for import validation report) ──────
@@ -752,293 +709,7 @@ async def import_schemes(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """
-    Import schemes from a structured Excel file (same 6-tab format as export).
-    Bypasses validation but returns a per-scheme report of missing/incomplete fields.
-    Agency-scoped: non-admin users can only import into their own agency.
-    """
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="Only .xlsx / .xls files are supported")
-
-    content = await file.read()
-    try:
-        wb = load_workbook(io.BytesIO(content), data_only=True)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Cannot read Excel file: {exc}")
-
-    # ── Parse each sheet into dicts keyed by (scheme_name, agency) ──
-    def _ws_rows(*sheet_names: str):
-        ws = None
-        for n in sheet_names:
-            if n in wb.sheetnames:
-                ws = wb[n]
-                break
-        if ws is None:
-            return []
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            return []
-        headers = [str(h).strip() if h else "" for h in rows[0]]
-        return [dict(zip(headers, row)) for row in rows[1:] if any(v is not None for v in row)]
-
-    def _v(row, *keys):
-        for k in keys:
-            if k in row and row[k] not in (None, ""):
-                return str(row[k]).strip()
-        return ""
-
-    # ── Sheet 1: Overview ──
-    overview_rows = _ws_rows("1. Scheme Overview", "Scheme Overview")
-    schemes_map: dict[tuple, dict] = {}  # (name, agency) -> tab_data
-    for row in overview_rows:
-        name = _v(row, "Scheme Name")
-        agency = _v(row, "Agency")
-        if not name:
-            continue
-        key = (name, agency)
-        schemes_map[key] = {
-            "overview": {
-                "scheme_name": name,
-                "agency": agency,
-                "scheme_code": _v(row, "Scheme Code"),
-                "legislated_or_consent": _v(row, "Legislated/Consent"),
-                "consent_scope": _v(row, "Consent Scope"),
-                "valid_from": _v(row, "Valid From"),
-                "valid_to": _v(row, "Valid To"),
-                "background_info": {
-                    "org_established": _v(row, "Org Established"),
-                    "purpose": _v(row, "Purpose"),
-                    "funding_source": _v(row, "Funding Source"),
-                    "governing_body": _v(row, "Governing Body"),
-                    "eligibility_org": _v(row, "Eligibility Org"),
-                    "eval_orgs": _v(row, "Evaluating Orgs"),
-                    "third_parties": _v(row, "Third Parties"),
-                    "group_name": _v(row, "Group Name"),
-                    "logo_info": _v(row, "Logo Info"),
-                },
-            },
-            "mt_parameters": {},
-            "transactions": {},
-            "homes_functions": {},
-            "mt_bands": {"bands": [], "rankings": []},
-            "api_interfaces": {},
-        }
-
-    # ── Sheet 2: MT Parameters ──
-    for row in _ws_rows("2. Scheme MT Parameters", "Scheme MT Parameters"):
-        key = (_v(row, "Scheme Name"), _v(row, "Agency"))
-        if key not in schemes_map:
-            continue
-        def _inclusion(col):
-            raw = _v(row, col)
-            if not raw:
-                return {}
-            try:
-                parsed = _json.loads(raw)
-                return parsed if isinstance(parsed, dict) else {}
-            except Exception:
-                return {}
-        schemes_map[key]["mt_parameters"] = {
-            "same_as_applicant": _v(row, "Same As Applicant"),
-            "relationship_desc": _v(row, "Relationship Desc"),
-            "residence_status": _v(row, "Residence Status"),
-            "foreigner_pass_types": _v(row, "Foreigner Pass Types"),
-            "related_used": _v(row, "Related Used"), "related_construct": _v(row, "Related Construct"), "related_deviation": _v(row, "Related Deviation"),
-            "related": {"inclusion": _inclusion("Related Inclusion JSON")},
-            "nuclear_used": _v(row, "Nuclear Used"), "nuclear_construct": _v(row, "Nuclear Construct"), "nuclear_deviation": _v(row, "Nuclear Deviation"),
-            "nuclear": {"inclusion": _inclusion("Nuclear Inclusion JSON")},
-            "parent_guardian_used": _v(row, "Parent Guardian Used"), "parent_guardian_construct": _v(row, "Parent Guardian Construct"), "parent_guardian_deviation": _v(row, "Parent Guardian Deviation"),
-            "parent_guardian": {"inclusion": _inclusion("Parent Guardian Inclusion JSON")},
-            "immediate_family_used": _v(row, "Immediate Family Used"), "immediate_family_construct": _v(row, "Immediate Family Construct"), "immediate_family_deviation": _v(row, "Immediate Family Deviation"),
-            "immediate_family": {"inclusion": _inclusion("Immediate Family Inclusion JSON")},
-            "freeform_used": _v(row, "Freeform Used"), "freeform_construct": _v(row, "Freeform Construct"), "freeform_deviation": _v(row, "Freeform Deviation"),
-            "freeform": {"inclusion": _inclusion("Freeform Inclusion JSON")},
-            "income_employment": _v(row, "Income Employment"), "income_trade": _v(row, "Income Trade"),
-            "income_investments": _v(row, "Income Investments"), "income_rental": _v(row, "Income Rental"), "income_rollup": _v(row, "Income Rollup"),
-            "av_used": _v(row, "AV Used"), "mp_used": _v(row, "MP Used"),
-        }
-
-    # ── Sheet 3: Transaction Details ──
-    months_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    for row in _ws_rows("3. Transaction Details", "Transaction Details"):
-        key = (_v(row, "Scheme Name"), _v(row, "Agency"))
-        if key not in schemes_map:
-            continue
-        tx: dict = {
-            "portal_corppass": _v(row, "HOMES Portal (CorpPass)"), "num_orgs_corppass": _v(row, "No. Orgs CorpPass"),
-            "portal_intranet": _v(row, "HOMES Portal (Intranet)"), "num_orgs_intranet": _v(row, "No. Orgs Intranet"),
-            "batch_sftp": _v(row, "Batch SFTP"), "realtime_apex": _v(row, "Realtime APEX"),
-            "sched_reports_delivery": _v(row, "Scheduled Reports Delivery"), "required_sched_reports": _v(row, "Required Scheduled Reports"),
-            "sys_intranet_sftp": _v(row, "Systems via Intranet SFTP"), "sys_intranet_api": _v(row, "Systems via Intranet API"),
-            "sys_internet_sftp": _v(row, "Systems via Internet SFTP"), "sys_internet_api": _v(row, "Systems via Internet API"),
-            "iface_status": _v(row, "Interfacing System Status"), "iface_ready_date": _v(row, "Interface Ready Date"), "iface_names": _v(row, "Interface System Names"),
-            "annual_mt_apps": _v(row, "Annual MT Applications"),
-            "manual_recon_pct": _v(row, "Manual Recon %"), "max_concurrent_users": _v(row, "Max Concurrent Users/hr"), "recon_breakdown": _v(row, "Reconciliation Breakdown"),
-            "vol_sftp_peak": _v(row, "SFTP Peak Vol"), "vol_sftp_avg": _v(row, "SFTP Avg Vol"),
-            "vol_api_peak": _v(row, "API Peak Vol"), "vol_api_avg": _v(row, "API Avg Vol"),
-            "vol_portal_peak": _v(row, "Portal Peak Vol"), "vol_portal_avg": _v(row, "Portal Avg Vol"),
-            "vol_bulk_query_peak": _v(row, "Bulk Query Peak Vol"), "vol_bulk_query_avg": _v(row, "Bulk Query Avg Vol"),
-        }
-        for i, m in enumerate(months_abbr):
-            tx[f"month_{i+1}"] = _v(row, f"Month {m}")
-        schemes_map[key]["transactions"] = tx
-
-    # ── Sheet 4: HOMES Functions ──
-    hf_events = [f"EV{str(i).zfill(3)}" for i in range(1, 15)]
-    hf_mtcs = ["related", "nuclear", "parent_guardian", "ifm"]
-    for row in _ws_rows("4. HOMES Functions", "HOMES Functions"):
-        key = (_v(row, "Scheme Name"), _v(row, "Agency"))
-        if key not in schemes_map:
-            continue
-        hf: dict = {
-            "allow_others_view": _v(row, "Allow Others to View?"), "can_view_others": _v(row, "Can View Others?"),
-            "affiliated_schemes": _v(row, "Affiliated Schemes"), "read_mshl": _v(row, "Read MSHL?"),
-            "subscribe_notifications": _v(row, "Subscribe Notifications?"), "beneficiary_scope": _v(row, "Beneficiary Scope"),
-            "auto_mt_sub": _v(row, "Auto-MT Subscription"), "cohort_basis": _v(row, "Cohort Basis"),
-        }
-        for m in hf_mtcs:
-            label = "IFM" if m == "ifm" else m.replace("_", "-").title()
-            hf[f"view_{m}"] = _v(row, f"MTC View: {label}")
-            hf[f"result_{m}"] = _v(row, f"Result View: {label}")
-        for e in hf_events:
-            hf[f"event_{e}"] = _v(row, f"Event {e}")
-        schemes_map[key]["homes_functions"] = hf
-
-    # ── Sheet 5: MT Bands (multiple rows per scheme) ──
-    for row in _ws_rows("5. MT Bands", "MT Bands"):
-        key = (_v(row, "Scheme Name"), _v(row, "Agency"))
-        if key not in schemes_map:
-            continue
-        row_type = _v(row, "Row Type")
-        if row_type == "Band":
-            schemes_map[key]["mt_bands"]["bands"].append({
-                "band_name": _v(row, "Band Name"), "band_version": _v(row, "Band Version"),
-                "gi_formula": _v(row, "GI Subsidy Formula"), "pci_formula": _v(row, "PCI Subsidy Formula"),
-                "min_income": _v(row, "Min Income"), "max_income": _v(row, "Max Income"),
-                "min_av": _v(row, "Min AV"), "max_av": _v(row, "Max AV"),
-            })
-        elif row_type == "Ranking":
-            schemes_map[key]["mt_bands"]["rankings"].append({
-                "label": _v(row, "Ranking Label"), "order": _v(row, "Ranking Order"),
-            })
-
-    # ── Sheet 6: API & Batch Interfaces ──
-    for row in _ws_rows("6. API & Batch Interfaces", "API & Batch Interfaces"):
-        key = (_v(row, "Scheme Name"), _v(row, "Agency"))
-        if key not in schemes_map:
-            continue
-        ai: dict = {}
-        for i in range(1, 20):
-            api_key = f"P12 API{i}"
-            ai[f"api_P12_API{i}_used"] = _v(row, f"{api_key} Used")
-            ai[f"api_P12_API{i}_avg"] = _v(row, f"{api_key} Avg TPS")
-            ai[f"api_P12_API{i}_peak"] = _v(row, f"{api_key} Peak TPS")
-        ai["api_P20_API_used"] = _v(row, "P20 API Used")
-        ai["api_P20_API_avg"] = _v(row, "P20 API Avg TPS")
-        ai["api_P20_API_peak"] = _v(row, "P20 API Peak TPS")
-        schemes_map[key]["api_interfaces"] = ai
-
-    # ── Persist: upsert each scheme as a draft ──────────────────
-    agency_filter = None if user.is_admin() else user.agency
-    results = []
-    for (name, agency), tab_data in schemes_map.items():
-        # Agency scope enforcement
-        if agency_filter and agency != agency_filter:
-            results.append({"scheme_name": name, "agency": agency, "status": "skipped", "reason": "Agency mismatch — you can only import into your own agency", "warnings": []})
-            continue
-
-        ov_data = tab_data["overview"]
-
-        # Find existing draft or create new
-        existing_q = await db.execute(
-            select(SchemeSubmission)
-            .join(SchemeOverview, SchemeSubmission.scheme_overview_id == SchemeOverview.id)
-            .where(SchemeOverview.scheme_name == name, SchemeOverview.agency == agency, SchemeSubmission.status == SubmissionStatus.draft.value)
-            .options(
-                selectinload(SchemeSubmission.overview),
-                selectinload(SchemeSubmission.mt_parameters),
-                selectinload(SchemeSubmission.transactions),
-                selectinload(SchemeSubmission.homes_functions),
-                selectinload(SchemeSubmission.mt_bands),
-                selectinload(SchemeSubmission.api_interfaces),
-            )
-            .limit(1)
-        )
-        sub = existing_q.scalars().first()
-        imported_new = sub is None
-
-        if sub is None:
-            # Create new master + overview + submission
-            master = SchemeMaster(agency=agency or "", scheme_name=name, scheme_code=ov_data.get("scheme_code"), created_by=user.id)
-            db.add(master)
-            await db.flush()
-
-            ov = SchemeOverview(
-                agency=agency, scheme_name=name, scheme_code=ov_data.get("scheme_code"),
-                legislated_or_consent=ov_data.get("legislated_or_consent"),
-                consent_scope=ov_data.get("consent_scope"),
-                background_info=ov_data.get("background_info", {}),
-            )
-            db.add(ov)
-            await db.flush()
-
-            valid_from = None
-            valid_to = None
-            try:
-                if ov_data.get("valid_from"):
-                    valid_from = date.fromisoformat(str(ov_data["valid_from"])[:10])
-                if ov_data.get("valid_to"):
-                    valid_to = date.fromisoformat(str(ov_data["valid_to"])[:10])
-            except Exception:
-                pass
-
-            sub = SchemeSubmission(
-                scheme_master_id=master.id, scheme_overview_id=ov.id,
-                status=SubmissionStatus.draft.value, version=1,
-                valid_from=valid_from, valid_to=valid_to, created_by=user.id,
-            )
-            db.add(sub)
-            await db.flush()
-        else:
-            # Update existing overview
-            ov = sub.overview
-            if ov:
-                ov.scheme_code = ov_data.get("scheme_code") or ov.scheme_code
-                ov.legislated_or_consent = ov_data.get("legislated_or_consent") or ov.legislated_or_consent
-                ov.consent_scope = ov_data.get("consent_scope") or ov.consent_scope
-                ov.background_info = ov_data.get("background_info") or ov.background_info
-
-        # Upsert each tab's JSON data
-        async def _upsert_tab(model_cls, rel_name: str, data_key: str):
-            obj_res = await db.execute(
-                select(model_cls).where(model_cls.submission_id == sub.id).limit(1)
-            )
-            obj = obj_res.scalars().first()
-            data = tab_data.get(data_key, {})
-            if obj is None:
-                obj = model_cls(submission_id=sub.id, data=data)
-                db.add(obj)
-            else:
-                obj.data = data
-
-        await _upsert_tab(SchemeMTParameters, "mt_parameters", "mt_parameters")
-        await _upsert_tab(TransactionDetails, "transactions", "transactions")
-        await _upsert_tab(HOMESFunctions, "homes_functions", "homes_functions")
-        await _upsert_tab(MTBands, "mt_bands", "mt_bands")
-        await _upsert_tab(APIBatchInterfaces, "api_interfaces", "api_interfaces")
-
-        # Validate and collect warnings
-        warnings = _validate_imported_scheme(name, agency, tab_data)
-
-        results.append({
-            "scheme_name": name,
-            "agency": agency,
-            "status": "created" if imported_new else "updated",
-            "warnings": warnings,
-        })
-
-    await db.commit()
-    return {"imported": len([r for r in results if r["status"] in ("created", "updated")]), "results": results}
+    return await import_export_service.import_schemes(db, user, file)
 
 @router.get("")
 async def list_schemes(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
@@ -1235,25 +906,7 @@ async def list_versions(scheme_id: str, db: AsyncSession = Depends(get_db), user
     sub = await _get_submission(db, scheme_id)
     await _ensure_master_for_submission(db, sub, user)
     _assert_agency_access(user, sub)
-
-    res = await db.execute(
-        select(SchemeSubmission)
-        .options(selectinload(SchemeSubmission.master), selectinload(SchemeSubmission.overview))
-        .where(SchemeSubmission.scheme_master_id == sub.scheme_master_id)
-        .order_by(SchemeSubmission.version.asc())
-    )
-    versions = res.scalars().all()
-    return [
-        {
-            "id": v.id,
-            "version": v.version,
-            "version_label": f"v{v.version}",
-            "status": _effective_status(v),
-            "valid_from": v.valid_from.isoformat() if v.valid_from else None,
-            "valid_to": v.valid_to.isoformat() if v.valid_to else None,
-        }
-        for v in versions
-    ]
+    return await lifecycle_service.list_versions(db, sub.scheme_master_id, _effective_status)
 
 
 @router.post("/{scheme_id}/clone-version", status_code=201)
@@ -1271,45 +924,7 @@ async def clone_version(scheme_id: str, body: CloneVersionBody, db: AsyncSession
     existing = vers_res.scalars().all()
     next_version = max([x.version for x in existing], default=0) + 1
 
-    src_ov = source.overview
-    overview = SchemeOverview(
-        agency=src_ov.agency if src_ov else (source.master.agency if source.master else user.agency),
-        scheme_name=src_ov.scheme_name if src_ov else (source.master.scheme_name if source.master else ""),
-        scheme_code=src_ov.scheme_code if src_ov else (source.master.scheme_code if source.master else None),
-        legislated_or_consent=src_ov.legislated_or_consent if src_ov else None,
-        consent_scope=src_ov.consent_scope if src_ov else None,
-        background_info=(dict(src_ov.background_info) if src_ov and src_ov.background_info else None),
-    )
-    db.add(overview)
-    await db.flush()
-
-    clone = SchemeSubmission(
-        scheme_master_id=source.scheme_master_id,
-        scheme_overview_id=overview.id,
-        status=SubmissionStatus.draft.value,
-        version=next_version,
-        valid_from=vf,
-        valid_to=vt,
-        cloned_from_submission_id=source.id,
-        created_by=user.id,
-    )
-    db.add(clone)
-    await db.flush()
-
-    def clone_tab(existing_obj, model_cls):
-        if not existing_obj:
-            return
-        copied = dict(existing_obj.data) if existing_obj.data else {}
-        db.add(model_cls(submission_id=clone.id, data=copied))
-
-    clone_tab(source.mt_parameters, SchemeMTParameters)
-    clone_tab(source.transactions, TransactionDetails)
-    clone_tab(source.homes_functions, HOMESFunctions)
-    clone_tab(source.mt_bands, MTBands)
-    clone_tab(source.api_interfaces, APIBatchInterfaces)
-
-    db.add(Comment(submission_id=clone.id, user_id=user.id, text=f"Cloned from v{source.version}", stage="cloned"))
-    await db.commit()
+    clone = await lifecycle_service.clone_version(db, source, user, vf, vt, next_version)
     return {"id": clone.id, "version": clone.version, "version_label": f"v{clone.version}", "status": clone.status}
 
 
@@ -1322,19 +937,7 @@ async def activate_version(scheme_id: str, db: AsyncSession = Depends(get_db), u
         raise HTTPException(status_code=400, detail=f"Only approved versions can be activated (current: {sub.status})")
     await _validate_version_window(db, sub.scheme_master_id, sub.valid_from, sub.valid_to, exclude_submission_id=sub.id)
 
-    res = await db.execute(select(SchemeSubmission).where(SchemeSubmission.scheme_master_id == sub.scheme_master_id))
-    versions = res.scalars().all()
-    for v in versions:
-        if v.id == sub.id:
-            continue
-        if _effective_status(v) == SubmissionStatus.active.value:
-            v.status = SubmissionStatus.expired.value
-
-    sub.status = SubmissionStatus.active.value
-    sub.updated_at = sg_now()
-    db.add(Comment(submission_id=sub.id, user_id=user.id, text="Version activated", stage="active"))
-    await db.commit()
-    return {"ok": True, "status": sub.status}
+    return await lifecycle_service.activate_version(db, sub, user, _effective_status)
 
 
 @router.post("/{scheme_id}/retire")
@@ -1345,12 +948,7 @@ async def retire_version(scheme_id: str, body: RetireBody = RetireBody(), db: As
         raise HTTPException(status_code=400, detail="Only active versions can be retired")
 
     retire_date = _parse_iso_date(body.retire_date, "retire_date") if body.retire_date else date.today()
-    sub.valid_to = retire_date
-    sub.status = SubmissionStatus.retired.value
-    sub.updated_at = sg_now()
-    db.add(Comment(submission_id=sub.id, user_id=user.id, text=(body.comment or "Version retired by MTO"), stage="retired"))
-    await db.commit()
-    return {"ok": True, "status": sub.status, "valid_to": sub.valid_to.isoformat() if sub.valid_to else None}
+    return await lifecycle_service.retire_version(db, sub, user, retire_date, body.comment)
 
 
 # ── Workflow ─────────────────────────────────────────────────────
@@ -1362,12 +960,9 @@ async def submit_scheme(scheme_id: str, db: AsyncSession = Depends(get_db), user
     _assert_agency_access(user, sub)
     if sub.status not in (SubmissionStatus.draft.value, SubmissionStatus.rejected.value):
         raise HTTPException(400, f"Cannot submit from status {sub.status}")
-    sub.status = SubmissionStatus.pending_review.value
-    sub.updated_at = sg_now()
-    db.add(Comment(submission_id=sub.id, user_id=user.id, text="Submitted for agency review", stage="submitted"))
-    await db.commit()
-    await _notify_for_workflow_stage(db, sub, SubmissionStatus.pending_review.value, triggered_by=user.id)
-    return {"ok": True, "status": sub.status}
+    resp = await lifecycle_service.submit_for_review(db, sub, user)
+    await notification_service.notify_for_workflow_stage(db, sub, SubmissionStatus.pending_review.value, triggered_by=user.id)
+    return resp
 
 
 @router.post("/{scheme_id}/approve")
@@ -1377,12 +972,9 @@ async def approve_scheme(scheme_id: str, db: AsyncSession = Depends(get_db), use
     _assert_agency_access(user, sub)
     if sub.status not in (SubmissionStatus.pending_review.value, SubmissionStatus.rejected.value):
         raise HTTPException(400, f"Cannot approve/send from status {sub.status}")
-    sub.status = SubmissionStatus.pending_final.value
-    sub.updated_at = sg_now()
-    db.add(Comment(submission_id=sub.id, user_id=user.id, text="Approved by agency approver and sent to MTO", stage="approved"))
-    await db.commit()
-    await _notify_for_workflow_stage(db, sub, SubmissionStatus.pending_final.value, triggered_by=user.id)
-    return {"ok": True, "status": sub.status}
+    resp = await lifecycle_service.approve_to_final(db, sub, user)
+    await notification_service.notify_for_workflow_stage(db, sub, SubmissionStatus.pending_final.value, triggered_by=user.id)
+    return resp
 
 
 @router.post("/{scheme_id}/final-approve")
@@ -1391,11 +983,7 @@ async def final_approve_scheme(scheme_id: str, db: AsyncSession = Depends(get_db
     sub = await _get_submission(db, scheme_id)
     if sub.status != SubmissionStatus.pending_final.value:
         raise HTTPException(400, f"Cannot final-approve from status {sub.status}")
-    sub.status = SubmissionStatus.approved.value
-    sub.updated_at = sg_now()
-    db.add(Comment(submission_id=sub.id, user_id=user.id, text="Final approval granted", stage="approved"))
-    await db.commit()
-    return {"ok": True, "status": sub.status}
+    return await lifecycle_service.final_approve(db, sub, user)
 
 
 @router.post("/{scheme_id}/reject")
@@ -1412,12 +1000,7 @@ async def reject_scheme(scheme_id: str, body: RejectBody = RejectBody(), db: Asy
     else:
         raise HTTPException(status_code=403, detail="Only agency approver or MTO admin can reject")
 
-    sub.status = SubmissionStatus.rejected.value
-    sub.updated_at = sg_now()
-    comment_text = body.comment or "Rejected"
-    db.add(Comment(submission_id=sub.id, user_id=user.id, text=comment_text, stage="rejected"))
-    await db.commit()
-    return {"ok": True, "status": sub.status}
+    return await lifecycle_service.reject(db, sub, user, body.comment)
 
 
 # ── Comments & Changes ───────────────────────────────────────────

@@ -65,6 +65,8 @@ Each form field has an info icon with guidance text pulled from the original Exc
 
 ## Project Structure
 
+See `FRONTEND_BACKEND_FILE_MAP.md` for the latest frontend/backend ownership map.
+
 ```
 app/
 ├── main.py                 # FastAPI app entry point, startup (table creation + user seeding)
@@ -74,7 +76,7 @@ app/
 ├── routers/
 │   └── schemes.py          # All scheme CRUD, workflow, comments, changes, export endpoints
 │   └── scheduling.py       # Onboarding slot listing, interest registration, reviewer notifications
-├── services/               # (reserved for future services)
+├── services/               # backend domain services (schemes, scheduling, guidance)
 ├── static/
 │   └── index.html          # Complete frontend SPA (login, 6 tabs, approval, user management)
 └── requirements.txt        # Python dependencies

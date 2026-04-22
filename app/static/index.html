@@ -280,6 +280,24 @@ let S={
   slotOverviewByYear:{}
 };
 
+const AppState={
+  get(){return S;},
+  setSchemes(items){S.schemes=Array.isArray(items)?items:[];},
+  getSchemes(){return S.schemes||[];},
+  setStatusFilter(filter){S.statusFilter=filter||'all';},
+  getStatusFilter(){return S.statusFilter||'all';}
+};
+
+const FrontendModules={
+  auth:'session and login flows',
+  schemesList:'list rendering, filtering, KPI summaries',
+  schemeDetail:'tab state and section editing',
+  scheduling:'calendar and booking views',
+  users:'user management and agency filters',
+  notifications:'delivery logs and notification UI',
+  guidance:'field guidance and hints'
+};
+
 // Role helpers
 function hasRole(...roles){return S.user&&roles.some(r=>(S.user.roles||[]).includes(r))}
 function isAdmin(){return hasRole('mto_admin')}
@@ -724,8 +742,9 @@ function statusBadge(st){
 // ════════════════════════════════════════
 // SCHEME LIST PAGE
 // ════════════════════════════════════════
-function renderListPage(){
-  return `
+const SchemeListController={
+  render(){
+    return `
   ${renderHeader()}
   <div class="p-6 max-w-7xl mx-auto fade-in">
     <div class="rounded-3xl px-7 py-7 mb-6 text-white relative overflow-hidden" style="background:radial-gradient(130% 120% at 0% 0%,#2f68ff 0%,#1e3a5f 45%,#0f2440 100%)">
@@ -775,39 +794,41 @@ function renderListPage(){
     <div id="schedulePanel" class="mb-6"></div>
     <div class="flex gap-2 mb-4" id="filterBar">
       ${['all','draft','pending_review','pending_final','approved','active','expired','retired','rejected'].map(f=>
-        `<button onclick="S.statusFilter='${f}';filterSchemes()" class="px-3 py-1.5 rounded-lg text-xs font-medium transition ${S.statusFilter===f?'bg-brand-600 text-white':'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}">${f==='all'?'All':f.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</button>`
+        `<button onclick="setStatusFilterAndFilter('${f}')" class="px-3 py-1.5 rounded-lg text-xs font-medium transition ${AppState.getStatusFilter()===f?'bg-brand-600 text-white':'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}">${f==='all'?'All':f.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</button>`
       ).join('')}
     </div>
     <div id="schemeTable" class="modern-card rounded-2xl overflow-hidden transition-shadow">
       <div class="px-5 py-8 text-center text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading schemes...</div>
     </div>
   </div>`;
-}
+  },
 
-async function loadSchemes(){
-  try{
-    S.schemes=await api('/api/schemes');
-    renderSchemeTable();
-  }catch(e){
-    document.getElementById('schemeTable').innerHTML=`<div class="px-5 py-8 text-center text-red-500 text-sm">${e.message}</div>`;
-  }
-}
+  async load(){
+    try{
+      AppState.setSchemes(await api('/api/schemes'));
+      this.renderTable();
+    }catch(e){
+      document.getElementById('schemeTable').innerHTML=`<div class="px-5 py-8 text-center text-red-500 text-sm">${e.message}</div>`;
+    }
+  },
 
-function filterSchemes(){
-  document.querySelectorAll('#filterBar button').forEach((b,i)=>{
-    const f=['all','draft','pending_review','pending_final','approved','active','expired','retired','rejected'][i];
-    b.className=`px-3 py-1.5 rounded-lg text-xs font-medium transition ${S.statusFilter===f?'bg-brand-600 text-white':'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`;
-  });
-  renderSchemeTable();
-}
+  filter(){
+    document.querySelectorAll('#filterBar button').forEach((b,i)=>{
+      const f=['all','draft','pending_review','pending_final','approved','active','expired','retired','rejected'][i];
+      b.className=`px-3 py-1.5 rounded-lg text-xs font-medium transition ${AppState.getStatusFilter()===f?'bg-brand-600 text-white':'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`;
+    });
+    this.renderTable();
+  },
 
-function renderSchemeTable(){
-  const filtered=S.statusFilter==='all'?S.schemes:S.schemes.filter(s=>s.status===S.statusFilter);
-  const showDelete=isAdmin();
-  const el=document.getElementById('schemeTable');
-  updateSchemeKpis(S.schemes||[]);
-  if(!filtered.length){el.innerHTML='<div class="px-5 py-8 text-center text-gray-400 text-sm">No schemes found</div>';return}
-  el.innerHTML=`
+  renderTable(){
+    const items=AppState.getSchemes();
+    const filter=AppState.getStatusFilter();
+    const filtered=filter==='all'?items:items.filter(s=>s.status===filter);
+    const showDelete=isAdmin();
+    const el=document.getElementById('schemeTable');
+    this.updateKpis(items);
+    if(!filtered.length){el.innerHTML='<div class="px-5 py-8 text-center text-gray-400 text-sm">No schemes found</div>';return}
+    el.innerHTML=`
   <table class="w-full text-sm">
     <thead><tr class="bg-gradient-to-r from-slate-50 to-white text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
       <th class="px-5 py-3">Scheme</th><th class="px-5 py-3">Code</th><th class="px-5 py-3">Agency</th>
@@ -831,19 +852,27 @@ function renderSchemeTable(){
       </tr>`).join('')}
     </tbody>
   </table>`;
-}
+  },
 
-function updateSchemeKpis(items){
-  const all=items||[];
-  const draft=all.filter(x=>x.status==='draft').length;
-  const approval=all.filter(x=>x.status==='pending_review'||x.status==='pending_final').length;
-  const approved=all.filter(x=>x.status==='approved'||x.status==='active').length;
-  const bind=(id,val)=>{const n=document.getElementById(id);if(n)n.textContent=String(val)};
-  bind('kpiTotal',all.length);
-  bind('kpiDraft',draft);
-  bind('kpiApproval',approval);
-  bind('kpiApproved',approved);
-}
+  updateKpis(items){
+    const all=items||[];
+    const draft=all.filter(x=>x.status==='draft').length;
+    const approval=all.filter(x=>x.status==='pending_review'||x.status==='pending_final').length;
+    const approved=all.filter(x=>x.status==='approved'||x.status==='active').length;
+    const bind=(id,val)=>{const n=document.getElementById(id);if(n)n.textContent=String(val)};
+    bind('kpiTotal',all.length);
+    bind('kpiDraft',draft);
+    bind('kpiApproval',approval);
+    bind('kpiApproved',approved);
+  }
+};
+
+function renderListPage(){return SchemeListController.render()}
+async function loadSchemes(){return SchemeListController.load()}
+function filterSchemes(){return SchemeListController.filter()}
+function renderSchemeTable(){return SchemeListController.renderTable()}
+function updateSchemeKpis(items){return SchemeListController.updateKpis(items)}
+function setStatusFilterAndFilter(filter){AppState.setStatusFilter(filter);SchemeListController.filter()}
 
 async function deleteScheme(schemeId){
   if(!isAdmin()){toast('Only MTO Admin can delete schemes','error');return}
