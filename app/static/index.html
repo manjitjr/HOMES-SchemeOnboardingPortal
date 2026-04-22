@@ -290,14 +290,54 @@ const TAB_ICONS=['fa-file-alt','fa-cog','fa-exchange-alt','fa-puzzle-piece','fa-
 // ════════════════════════════════════════
 // API
 // ════════════════════════════════════════
+let authFailureHandled=false;
+
+function handleAuthFailure(message='Session expired. Please sign in again.'){
+  if(authFailureHandled)return;
+  authFailureHandled=true;
+  S.token=null;
+  S.user=null;
+  S.view='list';
+  S.schemes=[];
+  S.currentScheme=null;
+  S.sessionStartedAt=null;
+  localStorage.removeItem('homes_token');
+  localStorage.removeItem('homes_user');
+  localStorage.removeItem('homes_session_started_at');
+  render();
+  toast(message,'info');
+  setTimeout(()=>{authFailureHandled=false},500);
+}
+
 async function api(path,opts={}){
   const h={'Content-Type':'application/json'};
   if(S.token)h['Authorization']='Bearer '+S.token;
   const res=await fetch(path,{headers:h,...opts,body:opts.body?JSON.stringify(opts.body):undefined});
   if(res.status===204)return null;
   const json=await res.json().catch(()=>null);
+  if(res.status===401){
+    const msg=json?.detail||'Session expired. Please sign in again.';
+    handleAuthFailure(msg);
+    throw new Error(msg);
+  }
   if(!res.ok)throw new Error(json?.detail||json?.message||'Request failed');
   return json;
+}
+
+async function authedFetch(path,opts={}){
+  const headers={...(opts.headers||{})};
+  if(S.token)headers['Authorization']='Bearer '+S.token;
+  const res=await fetch(path,{...opts,headers});
+  if(res.status===401){
+    let msg='Session expired. Please sign in again.';
+    try{
+      const body=await res.clone().json();
+      msg=body?.detail||msg;
+    }catch(_){/* no json body */}
+    handleAuthFailure(msg);
+    throw new Error(msg);
+  }
+  return res;
 }
 
 async function ensureAgenciesLoaded(){
@@ -3393,9 +3433,7 @@ document.addEventListener('DOMContentLoaded', render);
 
 async function exportAllSchemes(){
   try{
-    const resp = await fetch('/api/schemes/export-bulk',{
-      headers:{'Authorization':'Bearer '+S.token}
-    });
+    const resp = await authedFetch('/api/schemes/export-bulk');
     if(!resp.ok) throw new Error('Export failed: '+(await resp.text()));
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
@@ -3419,9 +3457,8 @@ async function handleImportFile(input){
   fd.append('file', file);
   toast('Importing…','info');
   try{
-    const resp = await fetch('/api/schemes/import-schemes',{
+    const resp = await authedFetch('/api/schemes/import-schemes',{
       method:'POST',
-      headers:{'Authorization':'Bearer '+S.token},
       body: fd,
     });
     const data = await resp.json();
