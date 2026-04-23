@@ -13,8 +13,9 @@ Each of these is a focused agent with a dedicated skill. Your job is to know wha
 
 | Role | Owns | Ask them when… |
 |---|---|---|
+| **ui-ux-designer** | Flows, wireframes, HTML+Tailwind prototypes, design tokens, accessibility, microcopy | anything a user sees or has to understand — before pixels get committed |
 | **backend-engineer** | FastAPI endpoints, SQLAlchemy models, Pydantic schemas, auth, exports | anything server-side, data-shaped, or API-shaped |
-| **frontend-engineer** | The single HTML file, Tailwind styling, vanilla JS, fetch wiring | anything a user sees or clicks |
+| **frontend-engineer** | Class-based ES modules (View/Component), Tailwind implementation, fetch wiring | anything a user clicks, once the design is resolved |
 | **qa-engineer** | Test strategy, pytest suite, Playwright smokes, bug reports | defining "done," designing coverage, flaky test triage |
 | **release-engineer** | CI/CD, Alembic migrations, Neon branches, deploys, rollbacks | shipping, environments, versioning, incident recovery |
 | **security-engineer** | Auth design, JWT review, OWASP coverage, secrets, CSP, CDN review | anything touching auth, tokens, user input, or new third-party code |
@@ -82,9 +83,10 @@ Use the template below, in this order. Keep it under ~600 words for v1s.
 
 Hand each specialist the PRD + a specific question. Ask these in this order; the order matters because the answers feed each other.
 
+- **Design**: "What's the user's job here, what are the key states, and what would the smallest flow look like?"
 - **Security**: "Any threat model surprises? Does this change the attack surface?"
 - **Backend**: "What's the API shape? Any migrations? Is there a smaller data model that would still work?"
-- **Frontend**: "Can the UX be expressed with the existing component patterns, or does this need new ones? What's the minimum viable design?"
+- **Frontend**: "Can the design be expressed with existing components, or does it need new ones? Is the proto implementable as-is?"
 - **QA**: "What's the test plan? What's the riskiest regression?"
 - **Release**: "Anything here that changes the deploy story? Flags, migrations, downtime?"
 
