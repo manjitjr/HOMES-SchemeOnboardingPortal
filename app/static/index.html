@@ -273,6 +273,9 @@ let S={
   tab5Section:'api',
   tab5Search:'',
   tab5GroupOpen:{},
+  tab3EventFilter:'all',
+  mtcEnabled:{},
+  mtcActiveTab:null,
   showHints:localStorage.getItem('homes_showHints')!=='false',
   guidance:{},  // Cached guidance by tab.field
   guidanceList:[],
@@ -664,6 +667,16 @@ function renderGovBanner(){
   </div>`;
 }
 
+function blankLogoDataUrl(){
+  const svg=`<svg xmlns='http://www.w3.org/2000/svg' width='120' height='80' viewBox='0 0 120 80'><rect x='0.5' y='0.5' width='119' height='79' rx='8' fill='#f8fafc' stroke='#cbd5e1'/><path d='M22 56l18-20 12 13 9-10 18 17H22z' fill='#cbd5e1'/><circle cx='42' cy='26' r='6' fill='#e2e8f0'/><text x='60' y='73' text-anchor='middle' font-family='Arial, sans-serif' font-size='9' fill='#94a3b8'>No Logo</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function currentSchemeLogoSrc(){
+  const bg=S.currentSchemeData?.background_info;
+  return (bg&&typeof bg==='object'&&bg.logo_data_url)?bg.logo_data_url:blankLogoDataUrl();
+}
+
 // ── HEADER ──
 function renderHeader(){
   const roleLabels={agency_creator:'Agency Creator',agency_approver:'Agency Approver',mto_admin:'MTO Admin'};
@@ -838,7 +851,14 @@ const SchemeListController={
     <tbody class="divide-y divide-gray-50">
       ${filtered.map(s=>`
       <tr class="hover:bg-blue-50/40 transition cursor-pointer" onclick="openScheme('${s.id}')">
-        <td class="px-5 py-3 font-medium text-gray-800">${esc(s.scheme_name||'Untitled')}</td>
+        <td class="px-5 py-3">
+          <div class="flex items-center gap-3 min-w-0">
+            <img src="${s.logo_data_url||blankLogoDataUrl()}" alt="${esc(s.scheme_name||'Scheme')} logo" class="w-10 h-10 rounded-lg border border-gray-200 bg-white object-contain shrink-0" onerror="this.src='${blankLogoDataUrl()}'">
+            <div class="min-w-0">
+              <div class="font-medium text-gray-800 truncate">${esc(s.scheme_name||'Untitled')}</div>
+            </div>
+          </div>
+        </td>
         <td class="px-5 py-3 text-gray-500 font-mono text-xs">${esc(s.scheme_code||'-')}</td>
         <td class="px-5 py-3 text-gray-500">${esc(s.agency||'-')}</td>
         <td class="px-5 py-3">${statusBadge(s.status)}</td>
@@ -1712,7 +1732,7 @@ async function doDeleteScheduleScheme(submissionId){
 // SCHEME DETAIL PAGE
 // ════════════════════════════════════════
 async function openScheme(id){
-  S.currentScheme=id;S.activeTab=0;S.view='detail';S.tabData={};
+  S.currentScheme=id;S.activeTab=0;S.view='detail';S.tabData={};S.mtcEnabled={};S.mtcActiveTab=null;
   render();
   await loadSchemeDetail();
 }
@@ -1775,6 +1795,8 @@ function renderDetailPage(){
 
 function renderDetailContent(){
   const d=S.currentSchemeData;if(!d)return;
+  const logoSrc=currentSchemeLogoSrc();
+  const hasLogo=!!(d.background_info&&d.background_info.logo_data_url);
   document.getElementById('detailTitle').textContent=d.scheme_name||'Untitled Scheme';
   document.getElementById('detailBadge').innerHTML=statusBadge(d.status);
   const ctx=document.getElementById('detailVersionCtx');
@@ -1801,7 +1823,16 @@ function renderDetailContent(){
         </div>
       </div>`:''}
       <div class="section-wrap mb-4">
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div class="kpi-card">
+            <div class="kpi-label">Version Logo</div>
+            <div class="mt-2 flex items-center gap-3">
+              <img src="${logoSrc}" alt="Scheme logo" class="w-16 h-16 rounded-xl border border-gray-200 bg-white object-contain" onerror="this.src='${blankLogoDataUrl()}'">
+              <div class="min-w-0">
+                <div class="text-sm font-semibold text-slate-800 truncate">${hasLogo?'Uploaded':'No logo uploaded'}</div>
+              </div>
+            </div>
+          </div>
           <div class="kpi-card"><div class="kpi-label">Scheme</div><div class="text-sm font-semibold text-slate-800 mt-1 truncate">${esc(d.scheme_name||'Untitled')}</div></div>
           <div class="kpi-card"><div class="kpi-label">Agency</div><div class="text-sm font-semibold text-slate-800 mt-1">${esc(d.agency||'-')}</div></div>
           <div class="kpi-card"><div class="kpi-label">Version</div><div class="kpi-value" style="font-size:1.2rem">${d.version||1}</div></div>
@@ -1977,6 +2008,9 @@ function renderTab0(){
   const bg=d.background_info||{};
   const isBg=typeof bg==='object';
   const consent=d.legislated_or_consent==='Consent';
+  const logoSrc=(isBg&&bg.logo_data_url)?bg.logo_data_url:blankLogoDataUrl();
+  const logoName=(isBg&&(bg.logo_filename||bg.logo_info))?String(bg.logo_filename||bg.logo_info):'';
+  const canEditLogo=!isReadOnly();
   return `
   ${sectionHead('Scheme Information','fa-info-circle')}
   <div class="grid grid-cols-2 gap-4">
@@ -2003,51 +2037,209 @@ function renderTab0(){
     ${fta('Organisation(s) which evaluates applications','bg_eval_orgs',isBg?bg.eval_orgs:'')}
     ${fta('Third parties receiving data','bg_third_parties',isBg?bg.third_parties:'','If yes, provide types of information passed on')}
     ${ff('Group Schemes name','bg_group_name',isBg?bg.group_name:'','e.g. HDB Schemes, IMDA Schemes')}
-    ${ff('Scheme Logo info','bg_logo_info',isBg?bg.logo_info:'')}
+    <div>
+      <label class="block text-xs font-medium text-gray-600 mb-1">Scheme Logo</label>
+      <div class="border border-gray-200 rounded-xl p-3 bg-surface-50">
+        <div class="flex items-start gap-3">
+          <img src="${logoSrc}" alt="Scheme logo preview" class="w-24 h-16 rounded-md border border-gray-200 bg-white object-contain" onerror="this.src='${blankLogoDataUrl()}'">
+          <div class="flex-1 min-w-0">
+            <div class="text-xs text-gray-500">Upload your scheme logo (PNG/JPG/SVG, max 1MB)</div>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <input type="file" accept="image/*" onchange="uploadSchemeLogo(this)" ${canEditLogo?'':'disabled'} class="block w-full max-w-xs text-xs text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-brand-600 file:text-white hover:file:bg-brand-700 disabled:opacity-60">
+              ${canEditLogo?`<button type="button" onclick="clearSchemeLogo()" class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700">Clear</button>`:''}
+            </div>
+            <div class="mt-1 text-[11px] text-gray-500 truncate">${esc(logoName||'No logo uploaded')}</div>
+          </div>
+        </div>
+      </div>
+      <input type="hidden" data-field="bg_logo_info" value="${esc(isBg?(bg.logo_info||''):'')}">
+    </div>
   </div>`;
+}
+
+async function uploadSchemeLogo(input){
+  const file=input?.files?.[0];
+  if(!file||!S.currentScheme)return;
+  try{
+    const formData=new FormData();
+    formData.append('file',file);
+    const res=await authedFetch(`/api/schemes/${S.currentScheme}/logo`,{method:'POST',body:formData});
+    const json=await res.json().catch(()=>null);
+    if(!res.ok)throw new Error(json?.detail||'Failed to upload scheme logo');
+    toast('Scheme logo uploaded');
+    await loadSchemeDetail();
+  }catch(e){
+    toast(e.message||'Failed to upload scheme logo','error');
+  }finally{
+    if(input)input.value='';
+  }
+}
+
+async function clearSchemeLogo(){
+  if(!S.currentScheme)return;
+  try{
+    const res=await authedFetch(`/api/schemes/${S.currentScheme}/logo`,{method:'DELETE'});
+    const json=await res.json().catch(()=>null);
+    if(!res.ok)throw new Error(json?.detail||'Failed to clear scheme logo');
+    toast('Scheme logo removed','info');
+    await loadSchemeDetail();
+  }catch(e){
+    toast(e.message||'Failed to clear scheme logo','error');
+  }
+}
+
+// ── MTC TYPES TOGGLE CARD UI HELPERS ──
+const MTC_DEFS=[
+  {name:'Related',        key:'related',          icon:'fa-link'},
+  {name:'Nuclear',        key:'nuclear',          icon:'fa-home'},
+  {name:'Parent-Guardian',key:'parent_guardian',  icon:'fa-user-shield'},
+  {name:'Imm. Family',    key:'immediate_family', icon:'fa-users'},
+  {name:'Free-form',      key:'freeform',         icon:'fa-pen-to-square'},
+];
+
+function initMtcState(d){
+  MTC_DEFS.forEach(m=>{
+    if(S.mtcEnabled[m.key]===undefined){
+      const sec=getMtcSectionData(d,m.key);
+      S.mtcEnabled[m.key]=sec.used==='Yes';
+    }
+  });
+  const enabledKeys=MTC_DEFS.filter(m=>S.mtcEnabled[m.key]).map(m=>m.key);
+  if(!S.mtcActiveTab||!S.mtcEnabled[S.mtcActiveTab])S.mtcActiveTab=enabledKeys[0]||null;
+}
+
+function syncMtcDomToState(){
+  // Flush visible construct/deviation fields from DOM into state before re-render
+  if(!S.mtcActiveTab)return;
+  const d=getTabData('mt_parameters');
+  const key=S.mtcActiveTab;
+  if(!d[key]||typeof d[key]!=='object')d[key]={};
+  const cEl=document.querySelector(`#tabContent [data-field="${key}_construct"]`);
+  if(cEl)d[key].construct=cEl.value;
+  const dvEl=document.querySelector(`#tabContent [data-field="${key}_deviation"]`);
+  if(dvEl)d[key].deviation=dvEl.value;
+}
+
+function toggleMtcEnabled(key){
+  syncMtcDomToState();
+  S.mtcEnabled[key]=!S.mtcEnabled[key];
+  const d=getTabData('mt_parameters');
+  const val=S.mtcEnabled[key]?'Yes':'No';
+  if(!d[key]||typeof d[key]!=='object')d[key]={};
+  d[key].used=val;
+  d[key+'_used']=val;
+  const enabledKeys=MTC_DEFS.filter(m=>S.mtcEnabled[m.key]).map(m=>m.key);
+  if(!S.mtcActiveTab||!S.mtcEnabled[S.mtcActiveTab])S.mtcActiveTab=enabledKeys[0]||null;
+  renderTabContent();
+}
+
+function setMtcActiveTab(key){syncMtcDomToState();S.mtcActiveTab=key;renderTabContent();}
+
+function setMtcInclusion(key,ms,val){
+  const d=getTabData('mt_parameters');
+  if(!d[key]||typeof d[key]!=='object')d[key]={};
+  if(!d[key].inclusion)d[key].inclusion={};
+  d[key].inclusion[ms]=val;
+  d[key+'_inclusion_'+statusFieldKey(ms)]=val;
+  renderTabContent();
+}
+
+function renderMtcTypes(d){
+  initMtcState(d);
+  const enabledKeys=MTC_DEFS.filter(m=>S.mtcEnabled[m.key]).map(m=>m.key);
+  const enabledCount=enabledKeys.length;
+
+  // Toggle cards
+  const cards=MTC_DEFS.map(m=>{
+    const on=S.mtcEnabled[m.key];
+    return `<button type="button" onclick="toggleMtcEnabled('${m.key}')" title="Click to ${on?'disable':'enable'} ${m.name} MTC"
+      class="flex flex-col items-center justify-center gap-1.5 py-3 px-2 rounded-xl border-2 transition-all text-xs font-semibold select-none
+      ${on?'border-blue-500 bg-blue-50 text-blue-700 shadow':'border-dashed border-gray-300 bg-white text-gray-400 hover:border-gray-400 hover:text-gray-500'}">
+      <i class="fas ${m.icon} text-base ${on?'text-blue-500':'text-gray-300'}"></i>
+      <span class="leading-tight text-center">${m.name}</span>
+      <span class="w-2 h-2 rounded-full ${on?'bg-blue-500':'bg-gray-200'}"></span>
+    </button>`;
+  }).join('');
+
+  // Summary badge
+  const badge=`<div class="flex items-center gap-2 mt-3 mb-4">
+    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${enabledCount>0?'bg-blue-100 text-blue-700':'bg-gray-100 text-gray-400'}">
+      <i class="fas fa-circle-check"></i>${enabledCount} of 5 MTC Types enabled
+    </span>
+    ${enabledCount===0?'<span class="text-xs text-gray-400 italic">Enable at least one MTC type to configure it.</span>':''}
+  </div>`;
+
+  // Sub-tabs + config panel
+  let configPanel='';
+  if(enabledCount>0){
+    const tabBar=enabledKeys.map(k=>{
+      const def=MTC_DEFS.find(m=>m.key===k);
+      const active=S.mtcActiveTab===k;
+      return `<button type="button" onclick="setMtcActiveTab('${k}')"
+        class="flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-colors whitespace-nowrap
+        ${active?'border-blue-500 text-blue-600 bg-white':'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}">
+        <i class="fas ${def.icon} text-[10px]"></i>${def.name}
+      </button>`;
+    }).join('');
+
+    const activeKey=S.mtcActiveTab;
+    const activeSec=getMtcSectionData(d,activeKey);
+
+    const memberGrid=MTC_MEMBER_STATUSES.map(ms=>{
+      const val=activeSec.inclusion[ms]||'Included';
+      const incl=val!=='Excluded';
+      return `<div class="flex items-center justify-between gap-2 px-3 py-1.5 rounded-md bg-gray-50 border border-gray-100">
+        <span class="text-xs text-gray-600 truncate">${ms}</span>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <span class="w-2 h-2 rounded-full ${incl?'bg-green-500':'bg-red-400'}"></span>
+          <select data-field="${activeKey}_inclusion_${statusFieldKey(ms)}" ${ro()} onchange="setMtcInclusion('${activeKey}','${ms}',this.value)"
+            class="text-xs border border-gray-200 rounded px-1.5 py-0.5 ${incl?'text-green-700':'text-red-600'} bg-white disabled:bg-gray-50">
+            <option value="Included" ${incl?'selected':''}>Included</option>
+            <option value="Excluded" ${!incl?'selected':''}>Excluded</option>
+          </select>
+        </div>
+      </div>`;
+    }).join('');
+
+    configPanel=`<div class="border border-gray-200 rounded-xl overflow-hidden">
+      <div class="flex border-b border-gray-200 bg-gray-50 overflow-x-auto">${tabBar}</div>
+      <div class="p-4">
+        <div class="grid grid-cols-2 gap-4 mb-4">
+          ${fsel('Whose construct?',activeKey+'_construct',['Applicant','Beneficiary'],activeSec.construct)}
+          ${fyn('Allow deviation from MTC?',activeKey+'_deviation',activeSec.deviation)}
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-2">Member Status <span class="text-gray-400 font-normal">(Standardised across all schemes)</span></label>
+          <div class="grid grid-cols-2 gap-1.5">${memberGrid}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Hidden inputs for ALL MTC types (non-active tabs not in DOM, so we bake values in)
+  const hiddenInputs=MTC_DEFS.map(m=>{
+    const k=m.key;
+    const sec=getMtcSectionData(d,k);
+    const isActive=enabledCount>0&&k===S.mtcActiveTab;
+    // Skip fields already rendered in the visible config panel for active tab
+    const usedVal=S.mtcEnabled[k]?'Yes':'No';
+    let h=`<input type="hidden" data-field="${k}_used" value="${usedVal}">`;
+    if(!isActive){
+      h+=`<input type="hidden" data-field="${k}_construct" value="${esc(sec.construct||'')}"><input type="hidden" data-field="${k}_deviation" value="${esc(sec.deviation||'')}">`;
+      MTC_MEMBER_STATUSES.forEach(ms=>{
+        const v=sec.inclusion[ms]||'Included';
+        h+=`<input type="hidden" data-field="${k}_inclusion_${statusFieldKey(ms)}" value="${v}">`;
+      });
+    }
+    return h;
+  }).join('');
+
+  return `<div class="grid grid-cols-5 gap-2 mb-1">${cards}</div>${badge}${configPanel}<div class="hidden">${hiddenInputs}</div>`;
 }
 
 // ── TAB 1: MT PARAMETERS ──
 function renderTab1(){
   const d=getTabData('mt_parameters');
-  const mtcTypes=['Related','Nuclear','Parent-Guardian','Immediate Family','Free-form'];
-
-  function mtcSection(name,key){
-    const sec=getMtcSectionData(d,key);
-    return `
-    <div class="border border-gray-200 rounded-lg mb-3">
-      <button type="button" onclick="toggleCollapsible(this)" class="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition rounded-lg">
-        <span><i class="fas fa-chevron-right text-xs mr-2 transition-transform collapsible-icon"></i>${name} MTC</span>
-        <span class="text-xs text-gray-400">${sec.used||'Not configured'}</span>
-      </button>
-      <div class="collapsible-body px-4 pb-4">
-        <div class="grid grid-cols-2 gap-4 mb-4">
-          ${fyn('Used by scheme?',key+'_used',sec.used)}
-          ${fsel('Whose construct?',key+'_construct',['Applicant','Beneficiary'],sec.construct)}
-        </div>
-        <div class="mb-4">
-          <label class="block text-xs font-medium text-gray-600 mb-2">Member Status Grid <span class="text-gray-400">(Standardised across all schemes)</span></label>
-          <div class="border border-gray-200 rounded-lg overflow-hidden">
-            <table class="w-full text-xs">
-              <thead><tr class="bg-surface-50"><th class="px-3 py-2 text-left">Status</th><th class="px-3 py-2 text-left">Inclusion</th></tr></thead>
-              <tbody class="divide-y divide-gray-100">
-                ${MTC_MEMBER_STATUSES.map(ms=>`<tr>
-                  <td class="px-3 py-1.5 text-gray-600">${ms}</td>
-                  <td class="px-3 py-1.5">
-                    <select data-field="${key}_inclusion_${statusFieldKey(ms)}" ${ro()} class="w-full max-w-[170px] border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
-                      <option value="Included" ${sec.inclusion[ms]==='Excluded'?'':'selected'}>Included</option>
-                      <option value="Excluded" ${sec.inclusion[ms]==='Excluded'?'selected':''}>Excluded</option>
-                    </select>
-                  </td>
-                </tr>`).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        ${fyn('Allow deviation from MTC?',key+'_deviation',sec.deviation)}
-      </div>
-    </div>`;
-  }
 
   return `
   ${sectionHead('Beneficiary & Applicant','fa-users')}
@@ -2061,7 +2253,7 @@ function renderTab1(){
   </div>
 
   ${sectionHead('MTC Types','fa-sitemap')}
-  ${mtcTypes.map((t,i)=>mtcSection(t,MTC_SECTION_KEYS[i])).join('')}
+  ${renderMtcTypes(d)}
 
   ${sectionHead('Income Components','fa-dollar-sign')}
   <div class="grid grid-cols-2 gap-4 mb-4">
@@ -2141,16 +2333,100 @@ function renderTab2(){
 }
 
 // ── TAB 3: HOMES FUNCTIONS ──
+const TAB3_EVENTS=[
+  ['EV001','Change in Marital Status'],['EV002','Change in Address'],['EV003','Change in Citizenship'],
+  ['EV004','Change in Income'],['EV005','Death of Member'],['EV006','New Birth'],
+  ['EV007','Change in Employment'],['EV008','Change in Property Ownership'],['EV009','Change in Vehicle Ownership'],
+  ['EV010','Change in Education Status'],['EV011','Change in NS Status'],['EV012','Immigration Status Change'],
+  ['EV013','Incarceration Event'],['EV014','Hospitalisation Event']
+];
+
+const TAB3_ACTIONS=['Auto-MT them','Notify me','Do nothing'];
+
+function tab3ActionClass(action){
+  if(action==='Auto-MT them')return 'bg-blue-100 text-blue-700';
+  if(action==='Notify me')return 'bg-amber-100 text-amber-700';
+  if(action==='Do nothing')return 'bg-gray-100 text-gray-600';
+  return 'bg-gray-50 text-gray-400';
+}
+
+function tab3FilterLabel(filter){
+  if(filter==='auto')return 'Auto-MT';
+  if(filter==='notify')return 'Notify';
+  if(filter==='none')return 'Do nothing';
+  if(filter==='unset')return 'Unset';
+  return 'All';
+}
+
+function tab3ActionMatchesFilter(action,filter){
+  if(filter==='all')return true;
+  if(filter==='auto')return action==='Auto-MT them';
+  if(filter==='notify')return action==='Notify me';
+  if(filter==='none')return action==='Do nothing';
+  if(filter==='unset')return !action;
+  return true;
+}
+
+function syncTab3DraftFromDom(){
+  if(S.activeTab!==3)return;
+  const d=getTabData('homes_functions');
+  document.querySelectorAll('#tabContent [data-field]').forEach(el=>{
+    const k=el.dataset.field;
+    if(!k)return;
+    if(el.tagName==='SELECT')d[k]=el.value;
+    else if(el.type==='checkbox')d[k]=el.checked;
+    else d[k]=el.value;
+  });
+}
+
+function setTab3EventFilter(filter){
+  syncTab3DraftFromDom();
+  S.tab3EventFilter=filter;
+  renderTabContent();
+}
+
+function setTab3SubscribeNotifications(value){
+  const d=getTabData('homes_functions');
+  d.subscribe_notifications=value;
+  if(String(value||'').toLowerCase()==='no'){
+    TAB3_EVENTS.forEach(([code])=>{d['event_'+code]='';});
+  }
+  renderTabContent();
+}
+
+function setTab3EventAction(code,value){
+  const d=getTabData('homes_functions');
+  if(String(d.subscribe_notifications||'').toLowerCase()==='no')return;
+  d['event_'+code]=value;
+  renderTabContent();
+}
+
+function applyTab3BulkAction(mode){
+  if(isReadOnly())return;
+  syncTab3DraftFromDom();
+  const d=getTabData('homes_functions');
+  if(String(d.subscribe_notifications||'').toLowerCase()==='no')return;
+  const map={auto:'Auto-MT them',notify:'Notify me',none:'Do nothing',clear:''};
+  const value=map[mode]??'';
+  TAB3_EVENTS.forEach(([code])=>{d['event_'+code]=value;});
+  renderTabContent();
+}
+
 function renderTab3(){
   const d=getTabData('homes_functions');
   const mtcList=['Related','Nuclear','Parent-Guardian','IFM'];
-  const events=[
-    ['EV001','Change in Marital Status'],['EV002','Change in Address'],['EV003','Change in Citizenship'],
-    ['EV004','Change in Income'],['EV005','Death of Member'],['EV006','New Birth'],
-    ['EV007','Change in Employment'],['EV008','Change in Property Ownership'],['EV009','Change in Vehicle Ownership'],
-    ['EV010','Change in Education Status'],['EV011','Change in NS Status'],['EV012','Immigration Status Change'],
-    ['EV013','Incarceration Event'],['EV014','Hospitalisation Event']
-  ];
+  const notificationsDisabled=String(d.subscribe_notifications||'').toLowerCase()==='no';
+  const notificationsEnabled=!notificationsDisabled;
+  const eventCounts={all:TAB3_EVENTS.length,auto:0,notify:0,none:0,unset:0};
+  TAB3_EVENTS.forEach(([code])=>{
+    const action=d['event_'+code]||'';
+    if(action==='Auto-MT them')eventCounts.auto+=1;
+    else if(action==='Notify me')eventCounts.notify+=1;
+    else if(action==='Do nothing')eventCounts.none+=1;
+    else eventCounts.unset+=1;
+  });
+  const configuredCount=eventCounts.auto+eventCounts.notify+eventCounts.none;
+  const visibleEvents=TAB3_EVENTS.filter(([code])=>tab3ActionMatchesFilter(d['event_'+code]||'',S.tab3EventFilter||'all'));
   return `
   ${sectionHead('MTC Viewing','fa-eye')}
   <div class="grid grid-cols-2 gap-4 mb-4">
@@ -2172,24 +2448,67 @@ function renderTab3(){
   ${fyn('Read MSHL computed result?','read_mshl',d.read_mshl)}
 
   ${sectionHead('Event Triggers','fa-bell')}
+  <div class="grid grid-cols-3 gap-2 mb-3">
+    <div class="rounded-lg border border-gray-200 bg-surface-50 px-3 py-2">
+      <div class="text-[10px] uppercase tracking-wide text-gray-500">Subscribed</div>
+      <div class="text-xs font-semibold ${d.subscribe_notifications==='Yes'?'text-emerald-700':'text-gray-700'}">${d.subscribe_notifications||'--'}</div>
+    </div>
+    <div class="rounded-lg border border-gray-200 bg-surface-50 px-3 py-2">
+      <div class="text-[10px] uppercase tracking-wide text-gray-500">Beneficiary Scope</div>
+      <div class="text-xs font-semibold text-gray-700 truncate">${esc(d.beneficiary_scope||'--')}</div>
+    </div>
+    <div class="rounded-lg border border-gray-200 bg-surface-50 px-3 py-2">
+      <div class="text-[10px] uppercase tracking-wide text-gray-500">Configured Events</div>
+      <div class="text-xs font-semibold text-brand-700">${configuredCount}/${TAB3_EVENTS.length}</div>
+    </div>
+  </div>
+
   <div class="grid grid-cols-2 gap-4 mb-4">
-    ${fyn('Subscribe to notifications?','subscribe_notifications',d.subscribe_notifications)}
+    <div>
+      <label class="block text-xs font-medium text-gray-600 mb-1">Subscribe to notifications?</label>
+      <select data-field="subscribe_notifications" onchange="setTab3SubscribeNotifications(this.value)" ${ro()} class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white transition disabled:bg-gray-50 disabled:text-gray-500">
+        <option value="">-- Select --</option>
+        <option value="Yes" ${d.subscribe_notifications==='Yes'?'selected':''}>Yes</option>
+        <option value="No" ${d.subscribe_notifications==='No'?'selected':''}>No</option>
+      </select>
+    </div>
     ${fsel('Beneficiary list scope','beneficiary_scope',['All individuals','Specific List','Not Applicable'],d.beneficiary_scope)}
   </div>
+  ${!notificationsEnabled?`<div class="mb-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-xs px-3 py-2">
+    Event trigger actions are disabled because <strong>Subscribe to notifications</strong> is set to <strong>No</strong>.
+  </div>`:''}
+
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+    <div class="flex flex-wrap items-center gap-1.5">
+      ${['all','auto','notify','none','unset'].map(f=>`<button type="button" onclick="setTab3EventFilter('${f}')" class="px-2.5 py-1 rounded-full text-xs border transition ${(S.tab3EventFilter||'all')===f?'bg-brand-600 border-brand-600 text-white':'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}">
+        ${tab3FilterLabel(f)} <span class="ml-1 ${(S.tab3EventFilter||'all')===f?'text-white/80':'text-gray-400'}">${f==='all'?eventCounts.all:eventCounts[f]}</span>
+      </button>`).join('')}
+    </div>
+    ${isReadOnly()?'':`<div class="flex items-center gap-1.5 ${notificationsEnabled?'':'opacity-50'}">
+      <span class="text-[11px] text-gray-500">Bulk:</span>
+      <button type="button" onclick="applyTab3BulkAction('auto')" ${notificationsEnabled?'':'disabled'} class="px-2 py-1 text-xs rounded border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100 disabled:cursor-not-allowed">Auto-MT all</button>
+      <button type="button" onclick="applyTab3BulkAction('notify')" ${notificationsEnabled?'':'disabled'} class="px-2 py-1 text-xs rounded border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:cursor-not-allowed">Notify all</button>
+      <button type="button" onclick="applyTab3BulkAction('none')" ${notificationsEnabled?'':'disabled'} class="px-2 py-1 text-xs rounded border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 disabled:cursor-not-allowed">Do nothing all</button>
+      <button type="button" onclick="applyTab3BulkAction('clear')" ${notificationsEnabled?'':'disabled'} class="px-2 py-1 text-xs rounded border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 disabled:cursor-not-allowed">Clear</button>
+    </div>`}
+  </div>
+
   <div class="border border-gray-200 rounded-lg overflow-hidden mb-4">
     <table class="w-full text-xs">
-      <thead><tr class="bg-surface-50"><th class="px-3 py-2 text-left">Event</th><th class="px-3 py-2 text-left">Description</th><th class="px-3 py-2 text-left w-48">Action</th></tr></thead>
+      <thead><tr class="bg-surface-50"><th class="px-3 py-2 text-left">Event</th><th class="px-3 py-2 text-left">Description</th><th class="px-3 py-2 text-left w-32">Status</th><th class="px-3 py-2 text-left w-48">Action</th></tr></thead>
       <tbody class="divide-y divide-gray-100">
-        ${events.map(([code,desc])=>`<tr>
+        ${visibleEvents.map(([code,desc])=>`<tr>
           <td class="px-3 py-1.5 font-mono text-gray-600">${code}</td>
           <td class="px-3 py-1.5 text-gray-600">${desc}</td>
+          <td class="px-3 py-1.5"><span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${tab3ActionClass(d['event_'+code]||'')}">${d['event_'+code]||'Unset'}</span></td>
           <td class="px-3 py-1.5">
-            <select data-field="event_${code}" ${ro()} class="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50">
+            <select data-field="event_${code}" onchange="setTab3EventAction('${code}',this.value)" ${ro()} ${notificationsEnabled?'':'disabled'} class="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white disabled:bg-gray-50 disabled:cursor-not-allowed">
               <option value="">--</option>
-              ${['Auto-MT them','Notify me','Do nothing'].map(o=>`<option ${d['event_'+code]===o?'selected':''}>${o}</option>`).join('')}
+              ${TAB3_ACTIONS.map(o=>`<option ${d['event_'+code]===o?'selected':''}>${o}</option>`).join('')}
             </select>
           </td>
         </tr>`).join('')}
+        ${visibleEvents.length===0?`<tr><td colspan="4" class="px-3 py-4 text-center text-gray-400">No events for ${tab3FilterLabel(S.tab3EventFilter||'all')} filter</td></tr>`:''}
       </tbody>
     </table>
   </div>
@@ -2560,6 +2879,8 @@ function renderTab5(){
 // COLLECT TAB DATA
 // ════════════════════════════════════════
 function collectTabData(){
+  // Flush active MTC sub-tab DOM values to state before collecting
+  if(S.activeTab===1)syncMtcDomToState();
   const data={};
   // Standard fields
   document.querySelectorAll('#tabContent [data-field]').forEach(el=>{
@@ -2613,6 +2934,7 @@ async function saveCurrentTab(showToast=true){
   try{
     if(S.activeTab===0){
       // Overview tab saves to PUT /api/schemes/{id}
+      const existingBg=(S.currentSchemeData&&typeof S.currentSchemeData.background_info==='object'&&S.currentSchemeData.background_info)?S.currentSchemeData.background_info:{};
       const body={
         agency:data.agency,scheme_name:data.scheme_name,scheme_code:data.scheme_code,
         valid_from:data.valid_from,valid_to:data.valid_to,
@@ -2621,7 +2943,8 @@ async function saveCurrentTab(showToast=true){
           org_established:data.bg_org_established,purpose:data.bg_purpose,
           funding_source:data.bg_funding_source,governing_body:data.bg_governing_body,
           eligibility_org:data.bg_eligibility_org,eval_orgs:data.bg_eval_orgs,
-          third_parties:data.bg_third_parties,group_name:data.bg_group_name,logo_info:data.bg_logo_info
+          third_parties:data.bg_third_parties,group_name:data.bg_group_name,logo_info:data.bg_logo_info,
+          logo_data_url:existingBg.logo_data_url||'',logo_content_type:existingBg.logo_content_type||'',logo_filename:existingBg.logo_filename||''
         }
       };
       await api(`/api/schemes/${S.currentScheme}`,{method:'PUT',body});

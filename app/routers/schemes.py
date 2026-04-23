@@ -1,5 +1,6 @@
 import uuid
 import io, json as _json
+import base64
 from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import StreamingResponse
@@ -730,6 +731,8 @@ async def list_schemes(db: AsyncSession = Depends(get_db), user: User = Depends(
             "scheme_name": s.master.scheme_name if s.master else (s.overview.scheme_name if s.overview else None),
             "scheme_code": s.master.scheme_code if s.master else (s.overview.scheme_code if s.overview else None),
             "agency": s.master.agency if s.master else (s.overview.agency if s.overview else None),
+            "logo_data_url": ((s.overview.background_info or {}).get("logo_data_url") if s.overview and s.overview.background_info else None),
+            "logo_filename": ((s.overview.background_info or {}).get("logo_filename") if s.overview and s.overview.background_info else None),
             "status": _effective_status(s),
             "version": s.version,
             "version_label": f"v{s.version}",
@@ -820,6 +823,108 @@ async def get_scheme(scheme_id: str, db: AsyncSession = Depends(get_db), user: U
     sub = await _get_submission(db, scheme_id)
     _assert_agency_access(user, sub)
     return _sub_to_dict(sub)
+
+
+@router.post("/{scheme_id}/logo")
+async def upload_scheme_logo(
+    scheme_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    sub = await _get_submission(db, scheme_id)
+    _assert_agency_access(user, sub)
+    if not _can_edit_submission(user, sub):
+        raise HTTPException(400, "You are not allowed to edit this scheme in its current status")
+
+    if not file.content_type or not str(file.content_type).startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image files are allowed")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded logo file is empty")
+    if len(raw) > 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Logo file size must be 1MB or less")
+
+    ov = sub.overview
+    if not ov:
+        raise HTTPException(status_code=404, detail="Scheme overview not found")
+
+    old_bg = dict(ov.background_info or {})
+    new_bg = dict(old_bg)
+    encoded = base64.b64encode(raw).decode("ascii")
+    new_bg["logo_data_url"] = f"data:{file.content_type};base64,{encoded}"
+    new_bg["logo_content_type"] = file.content_type
+    new_bg["logo_filename"] = file.filename or "scheme_logo"
+    new_bg["logo_info"] = file.filename or "Uploaded logo"
+
+    ov.background_info = new_bg
+    sub.updated_at = sg_now()
+
+    changes = [
+        {
+            "field": "background_info.logo_info",
+            "old": old_bg.get("logo_info", ""),
+            "new": new_bg.get("logo_info", ""),
+            "change_type": "updated",
+        },
+        {
+            "field": "background_info.logo_uploaded",
+            "old": bool(old_bg.get("logo_data_url")),
+            "new": True,
+            "change_type": "updated",
+        },
+    ]
+    if changes:
+        db.add(ChangeLog(submission_id=sub.id, changed_by=user.id, tab_name="overview", changes=changes))
+
+    await db.commit()
+    return {"ok": True, "background_info": new_bg}
+
+
+@router.delete("/{scheme_id}/logo")
+async def clear_scheme_logo(
+    scheme_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    sub = await _get_submission(db, scheme_id)
+    _assert_agency_access(user, sub)
+    if not _can_edit_submission(user, sub):
+        raise HTTPException(400, "You are not allowed to edit this scheme in its current status")
+
+    ov = sub.overview
+    if not ov:
+        raise HTTPException(status_code=404, detail="Scheme overview not found")
+
+    old_bg = dict(ov.background_info or {})
+    new_bg = dict(old_bg)
+    for k in ("logo_data_url", "logo_content_type", "logo_filename"):
+        new_bg.pop(k, None)
+    new_bg["logo_info"] = ""
+
+    ov.background_info = new_bg
+    sub.updated_at = sg_now()
+
+    changes = [
+        {
+            "field": "background_info.logo_info",
+            "old": old_bg.get("logo_info", ""),
+            "new": "",
+            "change_type": "updated",
+        },
+        {
+            "field": "background_info.logo_uploaded",
+            "old": bool(old_bg.get("logo_data_url")),
+            "new": False,
+            "change_type": "updated",
+        },
+    ]
+    if changes:
+        db.add(ChangeLog(submission_id=sub.id, changed_by=user.id, tab_name="overview", changes=changes))
+
+    await db.commit()
+    return {"ok": True, "background_info": new_bg}
 
 
 @router.put("/{scheme_id}")
